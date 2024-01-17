@@ -46,8 +46,8 @@ def get_data_from_gwosc(
     detectors: list[str],
     extracted_segment_duration: int = 20,
     crop=True,
-    downsampling: bool = True,
-    new_sampling_rate: int = CONFIG["signal.parameters"]["SamplingRate"],
+    downsample: bool = True,
+    new_sampling_rate: int = int(CONFIG["signal.parameters"]["SamplingRate"]),
     whitening: bool = True,
     verbose: bool = True,
 ):
@@ -72,7 +72,7 @@ def get_data_from_gwosc(
             signal_data = gwpy.timeseries.TimeSeries.fetch_open_data(
                 detector, *gps_time_segment, verbose=verbose
             )
-            if downsampling:
+            if downsample:
                 q_value = numpy.ceil(
                     numpy.ceil(
                         1.0 / (signal_data.times.value[1] - signal_data.times.value[0])
@@ -102,6 +102,6 @@ def get_data_from_gwosc(
                 )
                 signal_data = cropped_data
 
-            out_data_dict[event_name][detector] = signal_data
+            out_data_dict[event_name][detector] = signal_data.astype(FLOAT_PRECISION)
 
     return out_data_dict
