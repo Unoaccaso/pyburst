@@ -43,7 +43,10 @@ from cupyx.profiler import benchmark
 if __name__ == "__main__":
     # system_infos = commons.get_sys_info()
 
-    events_list = ["GW150914-v3", "GW190521-v2"]
+    events_list = [
+        "GW150914-v3",
+        # "GW190521-v2",
+    ]
     detectors_list = ["L1", "H1"]
     detectors_names = ["LIGO Livingston", "LIGO Hanford"]
     # preparing for plot
@@ -54,18 +57,14 @@ if __name__ == "__main__":
         figsize=((scale + 1) * len(detectors_list), scale * len(events_list)),
     )
 
-    duration = 20
-    sampling_rate = INT_PRECISION(CONFIG["signal.parameters"]["SamplingRate"])
+    sampling_rate = INT_PRECISION(CONFIG["signal.preprocessing"]["NewSamplingRate"])
     data_collection = signal.get_data_from_gwosc(
         events_list,
         detectors_list,
-        crop=True,
-        extracted_segment_duration=duration,
-        new_sampling_rate=sampling_rate,
-        verbose=False,
+        verbose=True,
     )
 
-    P = FLOAT_PRECISION(0.129)
+    p = FLOAT_PRECISION(0.129)
     Q = FLOAT_PRECISION(10.55)
     alpha = FLOAT_PRECISION(CONFIG["computation.parameters"]["Alpha"])
 
@@ -76,38 +75,32 @@ if __name__ == "__main__":
     t0 = time()
     for i, event in enumerate(events_list):
         for j, detector in enumerate(detectors_list):
-            data = data_collection[event][detector]
-            data_sampling_rate = numpy.ceil(1.0 / data.dx).value.astype(INT_PRECISION)
-            assert data_sampling_rate == sampling_rate
-
-            duration = data.times.value[-1] - data.times.value[0]
-            data_fft = scipy.fft.fft(data).astype(COMPLEX_PRECISION)
-            fft_freqs = FLOAT_PRECISION(scipy.fft.fftfreq(len(data)) * sampling_rate)
-
+            time_series = signal.preprocessing(
+                data_collection[event][detector]["time_serie"],
+                data_collection[event][detector]["gps_time"],
+            )
+            signal_strain = time_series.value
+            time_axis = time_series.times.value
             # performing qp-transform
-            tau_phi_plane_cp, phi_tiles = transform.get_tau_phi_plane(
-                data_fft,
-                fft_freqs,
-                P,
+            tau_phi_plane_cp, phi_tiles = transform.qp_transform(
+                signal_strain,
+                time_axis,
                 Q,
+                p,
                 [20, 500],
-                duration,
-                sampling_rate,
                 alpha,
             )
 
             print(f"Running a benchmark for the event {event} at {detectors_names[j]}:")
             print(
                 benchmark(
-                    transform.get_tau_phi_plane,
+                    transform.qp_transform,
                     (
-                        data_fft,
-                        fft_freqs,
-                        P,
+                        signal_strain,
+                        time_axis,
                         Q,
+                        p,
                         [20, 500],
-                        duration,
-                        sampling_rate,
                         alpha,
                     ),
                     n_repeat=100,
@@ -116,7 +109,6 @@ if __name__ == "__main__":
             )
             energy = cupy.asnumpy(cupy.abs(tau_phi_plane_cp) ** 2)
             phis = cupy.asnumpy(phi_tiles)
-            tau = data.times.value
 
             # plotting region
             if len(events_list) == 1:
@@ -126,7 +118,7 @@ if __name__ == "__main__":
             else:
                 coords = (i, j)
             axis[coords].pcolormesh(
-                tau,
+                time_axis,
                 phis,
                 energy,
                 cmap="viridis",

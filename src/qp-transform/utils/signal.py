@@ -45,11 +45,7 @@ from utils.commons import FLOAT_PRECISION, INT_PRECISION, COMPLEX_PRECISION
 def get_data_from_gwosc(
     event_names: list[str],
     detectors: list[str],
-    extracted_segment_duration: int = 20,
-    crop=True,
-    downsample: bool = True,
-    new_sampling_rate: int = int(CONFIG["signal.parameters"]["SamplingRate"]),
-    whitening: bool = True,
+    segment_duration: int = INT_PRECISION(CONFIG["signal.download"]["SegmentDuration"]),
     verbose: bool = True,
 ):
     # making sure that typing is correct
@@ -65,44 +61,109 @@ def get_data_from_gwosc(
 
         gps_time = gwosc.datasets.event_gps(event_name)
         gps_time_segment = (
-            gps_time - extracted_segment_duration / 2,
-            gps_time + extracted_segment_duration / 2,
+            gps_time - segment_duration / 2,
+            gps_time + segment_duration / 2,
         )
 
         for detector in detectors:
+            if verbose:
+                print(f"Downloaing '{event_name}' data from '{detector}'.")
             signal_data = gwpy.timeseries.TimeSeries.fetch_open_data(
                 detector, *gps_time_segment, verbose=verbose
             )
-            if downsample:
-                q_value = numpy.ceil(
-                    numpy.ceil(
-                        1.0 / (signal_data.times.value[1] - signal_data.times.value[0])
-                    )
-                    / new_sampling_rate
-                ).astype(INT_PRECISION)
-                downsampled_data = scipy.signal.decimate(signal_data, q_value)
-                signal_data = gwpy.timeseries.TimeSeries(
-                    downsampled_data,
-                    x0=gps_time_segment[0],
-                    dx=1 / new_sampling_rate,
-                    copy=False,
-                )
-
-            if whitening:
-                white_data = signal_data.whiten()
-                signal_data = white_data
-
-            if crop:
-                cropped_data = signal_data.crop(
-                    gps_time
-                    - int(CONFIG["computation.parameters"]["LeftCropMilliseconds"])
-                    * 1e-3,
-                    gps_time
-                    + int(CONFIG["computation.parameters"]["RightCropMilliseconds"])
-                    * 1e-3,
-                )
-                signal_data = cropped_data
-
-            out_data_dict[event_name][detector] = signal_data.astype(FLOAT_PRECISION)
+            out_data_dict[event_name][detector] = {}
+            out_data_dict[event_name][detector]["time_serie"] = signal_data
+            out_data_dict[event_name][detector]["gps_time"] = gps_time
 
     return out_data_dict
+
+
+def preprocessing(
+    time_series: gwpy.timeseries.TimeSeries,
+    event_gps_time: FLOAT_PRECISION,
+    crop: int = int(
+        CONFIG["signal.preprocessing"]["Resample"],
+    ),
+    left_dt_ms: int = int(
+        CONFIG["signal.preprocessing"]["LeftCropMilliseconds"],
+    ),
+    right_dt_ms: int = int(
+        CONFIG["signal.preprocessing"]["RightCropMilliseconds"],
+    ),
+    resample: int = int(
+        CONFIG["signal.preprocessing"]["Resample"],
+    ),
+    new_sampling_rate: int = int(
+        CONFIG["signal.preprocessing"]["NewSamplingRate"],
+    ),
+    whitening: int = int(
+        CONFIG["signal.preprocessing"]["Whiten"],
+    ),
+):
+    """preprocessing
+
+    Used to perform some preprocessing on the signal.
+
+    Parameters
+    ----------
+    time_series : gwpy.timeseries.TimeSeries
+        The data should be downloaded using `gwpy`
+    event_gps_time : float32 | float64
+        Should be obtained using `gwpy`
+    crop : int, optional
+        by default uses the configuration file.
+    left_dt_ms : int, optional
+        by default uses the configuration file.
+    right_dt_ms : int, optional
+        by default uses the configuration file.
+    resample : int, optional
+        by default uses the configuration file.
+    new_sampling_rate : int, optional
+        by default uses the configuration file.
+    whitening : int, optional
+        by default uses the configuration file.
+
+    Returns
+    -------
+    gwpy.timeseries.TimeSeries
+        The processed data.
+    """
+    signal_data = time_series
+    segment_duration = INT_PRECISION(CONFIG["signal.download"]["SegmentDuration"])
+
+    # resampling
+    if resample:
+        q_value = numpy.ceil(
+            numpy.ceil(1.0 / (signal_data.times.value[1] - signal_data.times.value[0]))
+            / new_sampling_rate
+        ).astype(INT_PRECISION)
+        x0 = event_gps_time - segment_duration / 2
+        downsampled_data = scipy.signal.decimate(signal_data, q_value)
+
+        signal_data = gwpy.timeseries.TimeSeries(
+            downsampled_data,
+            x0=x0,
+            dx=1 / new_sampling_rate,
+            copy=False,
+        )
+
+        data_sampling_rate = numpy.ceil(1.0 / signal_data.dx).value.astype(
+            INT_PRECISION
+        )
+
+        assert data_sampling_rate == new_sampling_rate
+
+    # whitening
+    if whitening:
+        white_data = signal_data.whiten()
+        signal_data = white_data
+
+    # cropping
+    if crop:
+        cropped_data = signal_data.crop(
+            event_gps_time - left_dt_ms * 1e-3,
+            event_gps_time + right_dt_ms * 1e-3,
+        )
+        signal_data = cropped_data
+
+    return signal_data.astype(FLOAT_PRECISION)

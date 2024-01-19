@@ -28,6 +28,8 @@ import cupy
 
 # cpu section
 import numpy
+from numpy.typing import NDArray
+import scipy
 
 # fft computation
 import cupyx.scipy.fft as cufft
@@ -59,8 +61,8 @@ def fft_phi_plane_kernel(
     fft_values,
     fft_frequencies,
     sampling_rate,
-    P: FLOAT_PRECISION,
-    Q: FLOAT_PRECISION,
+    Q: numpy.float32 | numpy.float64,
+    p: numpy.float32 | numpy.float64,
     n_rows: INT_PRECISION,
     n_cols: INT_PRECISION,
     fft_phi_plane,
@@ -77,7 +79,7 @@ def fft_phi_plane_kernel(
         fft_value = fft_values[fft_freq_idx]
 
         # wavelet parameters
-        q_tilde = Q / cupy.sqrt(1.0 + 2.0j * Q * P)
+        q_tilde = Q / cupy.sqrt(1.0 + 2.0j * Q * p)
         norm = (
             ((2.0 * cupy.pi / (Q**2)) ** (1.0 / 4.0))
             * cupy.sqrt(1.0 / (2.0 * cupy.pi * phi))
@@ -95,26 +97,63 @@ def fft_phi_plane_kernel(
         )
 
 
-def get_tau_phi_plane(
-    signal_fft,
-    fft_frequencies,
-    P: FLOAT_PRECISION,
-    Q: FLOAT_PRECISION,
+def qp_transform(
+    signal_strain: NDArray,
+    time_axis: NDArray,
+    Q: numpy.float32 | numpy.float64,
+    p: numpy.float32 | numpy.float64,
     phi_range: list[Union[float, float]],
-    data_segment_duration: FLOAT_PRECISION,
-    data_sampling_rate: INT_PRECISION,
-    alpha: FLOAT_PRECISION = CONFIG["signal.parameters"]["alpha"],
+    alpha: numpy.float32
+    | numpy.float64 = FLOAT_PRECISION(CONFIG["computation.parameters"]["alpha"]),
 ):
-    #
-    #
-    # computing the tiling of phi
-    phi_tiles = get_phi_tiles(
+    r"""get_tau_phi_plane
+
+    Computes the qp-transform of given time series. The computation is performed on GPU.
+
+    Parameters
+    ----------
+    signal_strain : numpy.NDArray
+        The signal strain.
+    time_axis : numpy.NDArray
+        The time associated to the signal strain.
+    Q : float32 | float64
+        The Q parameter of the qp-transform.
+    p : float32 | float64
+        The p parameter of the qp-transform
+    phi_range : list[Union[float, float]]
+        The range of frequency of the time-frequency plane.
+    alpha : float32 | float64, optional
+        Alpha parameter. Used to build the :math:`\phi` axis.
+        Defaults to the value in the `config.ini` file
+
+    Returns
+    -------
+    cupy.NDArray
+        The :math:`\tau-\phi` plane, result of the qp-transform.
+    """
+    # getting useful parameters for phi-axis construction
+    time_series_duration = time_axis.max() - time_axis.min()
+
+    data_sampling_rate = numpy.ceil(1 / numpy.diff(time_axis)).astype(INT_PRECISION)
+    # checking that sampling rate is well defined before assigning it
+    assert (
+        len(numpy.unique(data_sampling_rate)) == 1
+    ), "Sampling rate is not well defined"
+    sampling_rate = INT_PRECISION(data_sampling_rate[0])
+
+    phi_axis = get_phi_axis(
         phi_range,
         alpha,
         Q,
-        P,
-        data_segment_duration,
-        data_sampling_rate,
+        p,
+        time_series_duration,
+        sampling_rate,
+    )
+
+    # computing signal fft using scipy
+    signal_fft = scipy.fft.fft(signal_strain).astype(COMPLEX_PRECISION)
+    fft_frequencies = FLOAT_PRECISION(
+        scipy.fft.fftfreq(len(signal_strain)) * sampling_rate
     )
 
     # TODO: voglio usare gli array persistenti (quando serve), per poter calcolare
@@ -122,12 +161,14 @@ def get_tau_phi_plane(
 
     # preallocating the fft-phi plane.
     fft_phi_plane = cupy.zeros(
-        (phi_tiles.shape[0], signal_fft.shape[0]),
+        (phi_axis.shape[0], signal_fft.shape[0]),
         dtype=COMPLEX_PRECISION,
     )
+    n_rows = INT_PRECISION(fft_phi_plane.shape[0])
+    n_cols = INT_PRECISION(fft_phi_plane.shape[1])
 
     # moving data to GPU for computation
-    phi_tiles_GPU = cupy.array(phi_tiles, dtype=FLOAT_PRECISION)
+    phi_axis_GPU = cupy.array(phi_axis, dtype=FLOAT_PRECISION)
     signal_fft_GPU = cupy.array(signal_fft, dtype=COMPLEX_PRECISION)
     fft_frequencies_GPU = cupy.array(fft_frequencies, dtype=FLOAT_PRECISION)
 
@@ -140,31 +181,31 @@ def get_tau_phi_plane(
 
     # here the qp transform is calculated
     fft_phi_plane_kernel[grid_shape, block_shape](
-        phi_tiles_GPU,
+        phi_axis_GPU,
         signal_fft_GPU,
         fft_frequencies_GPU,
-        data_sampling_rate,
-        P,
+        sampling_rate,
         Q,
-        INT_PRECISION(fft_phi_plane.shape[0]),
-        INT_PRECISION(fft_phi_plane.shape[1]),
+        p,
+        n_rows,
+        n_cols,
         fft_phi_plane,
     )
 
     # here the inverse fft is computed and the phi-tau plane is returned
     norm_tau_phi_plane_GPU = cufft.ifft(fft_phi_plane)
 
-    return norm_tau_phi_plane_GPU, phi_tiles
+    return norm_tau_phi_plane_GPU, phi_axis_GPU
 
 
-def get_phi_tiles(
+def get_phi_axis(
     phi_range: list[Union[float, float]],
-    alpha: FLOAT_PRECISION,
-    Q: FLOAT_PRECISION,
-    P: FLOAT_PRECISION,
-    data_segment_duration: float,
+    alpha: numpy.float32 | numpy.float64,
+    Q: numpy.float32 | numpy.float64,
+    p: numpy.float32 | numpy.float64,
+    time_series_duration: float,
     data_sampling_rate: int = INT_PRECISION(
-        CONFIG["signal.parameters"]["SamplingRate"]
+        CONFIG["signal.preprocessing"]["NewSamplingRate"]
     ),
     thr_sigmas: int = 4,
 ):
@@ -172,18 +213,6 @@ def get_phi_tiles(
 
     Build an array containing all the frequencies over wich the
     transform will be computed.
-
-    Example
-    -------
-    [To be done]::
-
-        $ an example.py
-
-    Another section
-
-    Notes
-    -----
-        Prova
 
     Arguments
     ---------
@@ -196,9 +225,9 @@ def get_phi_tiles(
             to maximize the statistics.
         Q : float
             Q parameter of the Qp-Transform.
-        P : float
+        p : float
             P parameter of the Qp-Transform
-        data_segment_duration : float
+        time_series_duration : float
             Time duration of the data segment over wich the transform will
             take place. Used to compute the minimum acceptable frequency.
         data_sampling_rate : :obj:`int`, optional
@@ -216,11 +245,11 @@ def get_phi_tiles(
     # perform sanity check on input to ensure safety limits:
     # Input range should be inside [0, Nyquist_freq] with thr_sigmas
     # of upper and lower space.
-    lowest_acceptable_phi = (1 / data_segment_duration) * (
-        1 - (thr_sigmas * numpy.sqrt(1 + ((2 * P * Q) ** 2))) / Q
+    lowest_acceptable_phi = (1 / time_series_duration) * (
+        1 - (thr_sigmas * numpy.sqrt(1 + ((2 * p * Q) ** 2))) / Q
     )
     highest_acceptable_phi = (data_sampling_rate / 2) * (
-        1 + (thr_sigmas * numpy.sqrt(1 + ((2 * P * Q) ** 2))) / Q
+        1 + (thr_sigmas * numpy.sqrt(1 + ((2 * p * Q) ** 2))) / Q
     )
     # Adjusting phi range
     if phi_range[0] < lowest_acceptable_phi:
@@ -243,15 +272,15 @@ def get_phi_tiles(
 
     n_tiles = numpy.ceil(
         numpy.log(max_phi / min_phi)
-        / numpy.log(1.0 + (alpha * numpy.sqrt(1 + ((2 * P * Q) ** 2))) / Q),
+        / numpy.log(1.0 + (alpha * numpy.sqrt(1 + ((2 * p * Q) ** 2))) / Q),
     ).astype(INT_PRECISION)
 
     # building an array of phi values
-    phi_tiles = numpy.geomspace(
+    phi_axis = numpy.geomspace(
         min_phi,
         max_phi,
         n_tiles,
         dtype=FLOAT_PRECISION,
     )
 
-    return phi_tiles
+    return phi_axis
