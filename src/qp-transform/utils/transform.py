@@ -25,6 +25,7 @@ sys.path.append(PATH_TO_MASTER)
 # cuda section
 from cupyx import jit
 import cupy
+import cupy.typing
 
 # cpu section
 import numpy
@@ -98,13 +99,12 @@ def fft_phi_plane_kernel(
 
 
 def qp_transform(
-    signal_strain: NDArray,
+    signal_fft: cupy.typing.NDArray,
+    fft_freqs: cupy.typing.NDArray,
     time_axis: NDArray,
     Q: numpy.float32 | numpy.float64,
     p: numpy.float32 | numpy.float64,
-    phi_range: list[Union[float, float]],
-    alpha: numpy.float32
-    | numpy.float64 = FLOAT_PRECISION(CONFIG["computation.parameters"]["alpha"]),
+    phi_axis: cupy.typing.NDArray,
 ):
     r"""get_tau_phi_plane
 
@@ -120,8 +120,8 @@ def qp_transform(
         The Q parameter of the qp-transform.
     p : float32 | float64
         The p parameter of the qp-transform
-    phi_range : list[Union[float, float]]
-        The range of frequency of the time-frequency plane.
+    phi_axis : cupy.NDArray
+        Array of frequency for the plane.
     alpha : float32 | float64, optional
         Alpha parameter. Used to build the :math:`\phi` axis.
         Defaults to the value in the `config.ini` file
@@ -131,8 +131,6 @@ def qp_transform(
     cupy.NDArray
         The :math:`\tau-\phi` plane, result of the qp-transform.
     """
-    # getting useful parameters for phi-axis construction
-    time_series_duration = time_axis.max() - time_axis.min()
 
     data_sampling_rate = numpy.ceil(1 / numpy.diff(time_axis)).astype(INT_PRECISION)
     # checking that sampling rate is well defined before assigning it
@@ -140,21 +138,6 @@ def qp_transform(
         len(numpy.unique(data_sampling_rate)) == 1
     ), "Sampling rate is not well defined"
     sampling_rate = INT_PRECISION(data_sampling_rate[0])
-
-    phi_axis = get_phi_axis(
-        phi_range,
-        alpha,
-        Q,
-        p,
-        time_series_duration,
-        sampling_rate,
-    )
-
-    # computing signal fft using scipy
-    signal_fft = scipy.fft.fft(signal_strain).astype(COMPLEX_PRECISION)
-    fft_frequencies = FLOAT_PRECISION(
-        scipy.fft.fftfreq(len(signal_strain)) * sampling_rate
-    )
 
     # TODO: voglio usare gli array persistenti (quando serve), per poter calcolare
     # TODO: la qp transform su un dataset di dimensione grande a piacere.
@@ -167,11 +150,6 @@ def qp_transform(
     n_rows = INT_PRECISION(fft_phi_plane.shape[0])
     n_cols = INT_PRECISION(fft_phi_plane.shape[1])
 
-    # moving data to GPU for computation
-    phi_axis_GPU = cupy.array(phi_axis, dtype=FLOAT_PRECISION)
-    signal_fft_GPU = cupy.array(signal_fft, dtype=COMPLEX_PRECISION)
-    fft_frequencies_GPU = cupy.array(fft_frequencies, dtype=FLOAT_PRECISION)
-
     # instatiating cuda variables
     grid_shape = (
         fft_phi_plane.shape[1] // BLOCK_SHAPE[1] + 1,  # X
@@ -181,9 +159,9 @@ def qp_transform(
 
     # here the qp transform is calculated
     fft_phi_plane_kernel[grid_shape, block_shape](
-        phi_axis_GPU,
-        signal_fft_GPU,
-        fft_frequencies_GPU,
+        phi_axis,
+        signal_fft,
+        fft_freqs,
         sampling_rate,
         Q,
         p,
@@ -195,7 +173,7 @@ def qp_transform(
     # here the inverse fft is computed and the phi-tau plane is returned
     norm_tau_phi_plane_GPU = cufft.ifft(fft_phi_plane)
 
-    return norm_tau_phi_plane_GPU, phi_axis_GPU
+    return norm_tau_phi_plane_GPU
 
 
 def get_phi_axis(
@@ -284,3 +262,35 @@ def get_phi_axis(
     )
 
     return phi_axis
+
+def fit_qp(
+        signal_strain: cupy.typing.NDArray,
+        time_axis: cupy.typing.NDArray,
+        Q_range: list[Union[float, float]],
+        p_range: list[Union[float, float]],
+        phi_range: list[Union[float, float]],
+        alpha : float = FLOAT_PRECISION(CONFIG["computation.parameters"]["alpha"]),
+        number_of_Qs: int = INT_PRECISION(CONFIG["computation.parameters"]["N_q"]),
+        number_of_ps: int = INT_PRECISION(CONFIG["computation.parameters"]["N_p"]),
+        energy_density_threshold: float = FLOAT_PRECISION(CONFIG["computation.parameters"]["EnergyDensityThreshold"]),
+):
+    Q_values = cupy.linspace(Q_range[0], Q_range[1], number_of_Qs, dtype=FLOAT_PRECISION)
+    p_values = cupy.linspace(p_range[0], p_range[1], number_of_ps, dtype=FLOAT_PRECISION)
+
+    time_series_duration = time_axis.max() - time_axis.min()
+    sampling_rate = numpy.ceil(1 / numpy.diff(time_axis)[0]).astype(INT_PRECISION)
+    signal_fft = cufft.fft(signal_strain)
+    fft_frequencies = cupy.array(cufft.fftfreq(len(signal_strain)) * sampling_rate, dtype=FLOAT_PRECISION)
+    for p in p_values:
+        for Q in Q_values:
+            phi_axis = get_phi_axis(
+                phi_range,
+                alpha,
+                Q,
+                p,
+                time_series_duration,
+                sampling_rate,
+            )
+
+            tau_phi_plane = qp_transform(signal_fft, fft_frequencies, time_axis, Q, p, phi_axis,)
+            

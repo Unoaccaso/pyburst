@@ -79,16 +79,11 @@ if __name__ == "__main__":
                 data_collection[event][detector]["time_serie"],
                 data_collection[event][detector]["gps_time"],
             )
-            signal_strain = time_series.value
-            time_axis = time_series.times.value
+            signal_strain = cupy.array(time_series.value)
+            time_axis = cupy.array(time_series.times.value)
             # performing qp-transform
-            tau_phi_plane_cp, phi_tiles = transform.qp_transform(
-                signal_strain,
-                time_axis,
-                Q,
-                p,
-                [20, 500],
-                alpha,
+            plane, phi_axis = transform.fit_qp(
+                signal_strain, time_axis, [1, 100], [0.01, 1], [30, 500],
             )
 
             print(f"Running a benchmark for the event {event} at {detectors_names[j]}:")
@@ -107,8 +102,8 @@ if __name__ == "__main__":
                     n_warmup=3,
                 )
             )
-            energy = cupy.asnumpy(cupy.abs(tau_phi_plane_cp) ** 2)
-            phis = cupy.asnumpy(phi_tiles)
+            energy = cupy.asnumpy(cupy.abs(plane) ** 2)
+            phis = cupy.asnumpy(phi_axis)
 
             # plotting region
             if len(events_list) == 1:
