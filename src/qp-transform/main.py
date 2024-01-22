@@ -38,6 +38,7 @@ from utils import signal, transform
 import cupy, numpy, scipy, cupy.fft
 import matplotlib.pyplot as plt
 from cupyx.profiler import benchmark
+import cupy.fft as cufft
 
 
 if __name__ == "__main__":
@@ -45,9 +46,12 @@ if __name__ == "__main__":
 
     events_list = [
         "GW150914-v3",
-        # "GW190521-v2",
+        "GW190521-v2",
     ]
-    detectors_list = ["L1", "H1"]
+    detectors_list = [
+        "L1",
+        "H1",
+    ]
     detectors_names = ["LIGO Livingston", "LIGO Hanford"]
     # preparing for plot
     scale = 4
@@ -64,8 +68,6 @@ if __name__ == "__main__":
         verbose=True,
     )
 
-    p = FLOAT_PRECISION(0.129)
-    Q = FLOAT_PRECISION(10.55)
     alpha = FLOAT_PRECISION(CONFIG["computation.parameters"]["Alpha"])
 
     print(f"alpha is currently set to: {alpha:.2e}")
@@ -81,49 +83,89 @@ if __name__ == "__main__":
             )
             signal_strain = cupy.array(time_series.value)
             time_axis = cupy.array(time_series.times.value)
-            # performing qp-transform
-            plane, phi_axis = transform.fit_qp(
-                signal_strain, time_axis, [1, 100], [0.01, 1], [30, 500],
+            phi_range = [30, 500]
+            Q_range = [2 * numpy.pi, 6 * numpy.pi]
+            p_range = [0, 1]
+            best_Q, best_p, coords = transform.fit_qp(
+                signal_strain,
+                time_axis,
+                Q_range,
+                p_range,
+                phi_range,
             )
 
-            print(f"Running a benchmark for the event {event} at {detectors_names[j]}:")
-            print(
-                benchmark(
-                    transform.qp_transform,
-                    (
-                        signal_strain,
-                        time_axis,
-                        Q,
-                        p,
-                        [20, 500],
-                        alpha,
-                    ),
-                    n_repeat=100,
-                    n_warmup=3,
-                )
+            print(f"Best fit for Q and p: ({best_Q:.3f}, {best_p:.3f})")
+
+            # preparing data for scan
+            signal_fft = cufft.fft(signal_strain).astype(COMPLEX_PRECISION)
+            fft_frequencies = cupy.array(
+                cufft.fftfreq(len(signal_strain)) * sampling_rate, dtype=FLOAT_PRECISION
             )
-            energy = cupy.asnumpy(cupy.abs(plane) ** 2)
-            phis = cupy.asnumpy(phi_axis)
+            time_series_duration = time_axis.max() - time_axis.min()
+            phi_axis = transform.get_phi_axis(
+                phi_range,
+                Q_range,
+                p_range,
+                time_series_duration,
+                sampling_rate,
+            )
+
+            tau_phi_plane = transform.qp_transform(
+                signal_fft,
+                fft_frequencies,
+                phi_axis,
+                best_Q,
+                best_p,
+                sampling_rate,
+            )
+
+            energy = cupy.abs(tau_phi_plane) ** 2
 
             # plotting region
-            if len(events_list) == 1:
-                coords = j
+            if (len(events_list) == 1) and (len(detectors_list) == 1):
+                ax = axis
+            elif len(events_list) == 1:
+                ax = axis[j]
             elif len(detectors_list) == 1:
-                coords = i
+                ax = axis[i]
             else:
-                coords = (i, j)
-            axis[coords].pcolormesh(
-                time_axis,
-                phis,
-                energy,
+                ax = axis[i, j]
+
+            ax.pcolormesh(
+                time_axis.get(),
+                phi_axis.get(),
+                energy.get(),
                 cmap="viridis",
             )
-            axis[coords].set_yscale("log")
-            if i == 0:
-                axis[coords].set_title(detectors_names[j])
+            ax.scatter(coords[0].get(), coords[1].get(), c="red")
 
-    print("Plotting...")
+            ax.set_yscale("log")
+            if i == 0:
+                ax.set_title(detectors_names[j])
+
+    plt.tight_layout()
     plt.show()
+
+    # =========================
+    # Benchmarking
+
+    # performing qp-transform
+    # print(f"Performing benchmarks on event {event}, at {detectors_names[j]}")
+    # print(
+    #     benchmark(
+    #         transform.fit_qp,
+    #         (
+    #             signal_strain,
+    #             time_axis,
+    #             [2 * numpy.pi, 6 * numpy.pi],
+    #             [0, 1],
+    #             [30, 500],
+    #         ),
+    #         n_repeat=5,
+    #         n_warmup=1,
+    #     )
+    # )
+
     # max_idx = numpy.unravel_index(numpy.argmax(energy, axis=None), energy.shape)
     # print(f"\nMaximum energy value: {energy[max_idx]: .2f}")
     # CRs = (energy - numpy.median(energy)) / numpy.median(energy)
