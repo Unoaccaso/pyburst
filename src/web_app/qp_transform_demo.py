@@ -262,15 +262,25 @@ def check_and_download_timeseries():
     tau_min = numpy.int32(request.form.get("tau_min"))
     tau_max = numpy.int32(request.form.get("tau_max"))
 
-    result = download_signal_and_preprocess(
-        detector_id, event_name, 1, tau_min, tau_max
-    )
-
-    if result["success"]:
-        CACHED_TIME_SERIES.setdefault(detector_id, {})[event_name] = result["data"]
-        return jsonify({"success": True, "message": "Data processed"})
+    # Verifica se i dati sono già presenti nella cache
+    if (
+        detector_id in CACHED_TIME_SERIES
+        and event_name in CACHED_TIME_SERIES[detector_id]
+    ):
+        # I dati sono già presenti nella cache, restituisci direttamente i dati esistenti
+        data = CACHED_TIME_SERIES[detector_id][event_name]
+        return jsonify({"success": True, "message": "Data already in cache"})
     else:
-        return jsonify({"success": False, "message": result["message"]})
+        # I dati non sono presenti nella cache, effettua il download e aggiornamento della cache
+        result = download_signal_and_preprocess(
+            detector_id, event_name, 1, tau_min, tau_max
+        )
+
+        if result["success"]:
+            CACHED_TIME_SERIES.setdefault(detector_id, {})[event_name] = result["data"]
+            return jsonify({"success": True, "message": "Data processed"})
+        else:
+            return jsonify({"success": False, "message": "Failed to download data"})
 
 
 @app.route("/reselect_time_interval")
