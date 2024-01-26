@@ -34,18 +34,13 @@ import numpy
 import scipy.signal
 
 # custom settings
-import configparser
-
-PATH_TO_SETTINGS = PATH_TO_MASTER + "/config.ini"
-CONFIG = configparser.ConfigParser()
-CONFIG.read(PATH_TO_SETTINGS)
-from utils.commons import FLOAT_PRECISION, INT_PRECISION, COMPLEX_PRECISION
+from utils.commons import CONFIG
 
 
 def get_data_from_gwosc(
     event_names: list[str],
     detectors: list[str],
-    segment_duration: int = INT_PRECISION(CONFIG["signal.download"]["SegmentDuration"]),
+    segment_duration: int = numpy.int32(CONFIG["signal.download"]["SegmentDuration"]),
     verbose: bool = True,
 ):
     # making sure that typing is correct
@@ -72,7 +67,7 @@ def get_data_from_gwosc(
                 detector, *gps_time_segment, verbose=verbose
             )
             out_data_dict[event_name][detector] = {}
-            out_data_dict[event_name][detector]["time_serie"] = signal_data
+            out_data_dict[event_name][detector]["time_series"] = signal_data
             out_data_dict[event_name][detector]["gps_time"] = gps_time
 
     return out_data_dict
@@ -80,7 +75,7 @@ def get_data_from_gwosc(
 
 def preprocessing(
     time_series: gwpy.timeseries.TimeSeries,
-    event_gps_time: FLOAT_PRECISION,
+    event_gps_time: numpy.float32,
     crop: int = int(
         CONFIG["signal.preprocessing"]["Resample"],
     ),
@@ -129,14 +124,14 @@ def preprocessing(
         The processed data.
     """
     signal_data = time_series
-    segment_duration = INT_PRECISION(CONFIG["signal.download"]["SegmentDuration"])
+    segment_duration = numpy.int32(CONFIG["signal.download"]["SegmentDuration"])
 
     # resampling
     if resample:
         q_value = numpy.ceil(
             numpy.ceil(1.0 / (signal_data.times.value[1] - signal_data.times.value[0]))
             / new_sampling_rate
-        ).astype(INT_PRECISION)
+        ).astype(numpy.int32)
         x0 = event_gps_time - segment_duration / 2
         downsampled_data = scipy.signal.decimate(signal_data, q_value)
 
@@ -147,9 +142,7 @@ def preprocessing(
             copy=False,
         )
 
-        data_sampling_rate = numpy.ceil(1.0 / signal_data.dx).value.astype(
-            INT_PRECISION
-        )
+        data_sampling_rate = numpy.ceil(1.0 / signal_data.dx).value.astype(numpy.int32)
 
         assert data_sampling_rate == new_sampling_rate
 
@@ -161,9 +154,9 @@ def preprocessing(
     # cropping
     if crop:
         cropped_data = signal_data.crop(
-            event_gps_time - left_dt_ms * 1e-3,
+            event_gps_time + left_dt_ms * 1e-3,
             event_gps_time + right_dt_ms * 1e-3,
         )
         signal_data = cropped_data
 
-    return signal_data.astype(FLOAT_PRECISION)
+    return signal_data.astype(numpy.float32)

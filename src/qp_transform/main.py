@@ -28,17 +28,18 @@ import configparser
 
 CONFIG = configparser.ConfigParser()
 CONFIG.read(PATH_TO_THIS + "/config.ini")
-from utils.commons import FLOAT_PRECISION, INT_PRECISION, COMPLEX_PRECISION
 
 
 # custom modules
-from utils import signal, transform
+from utils import transform
+from utils.preprocessing import signal, build_frequency_axis
 
 # demo
 import cupy, numpy, scipy, cupy.fft
 import matplotlib.pyplot as plt
 from cupyx.profiler import benchmark
 import cupy.fft as cufft
+import scipy.fft
 
 
 if __name__ == "__main__":
@@ -46,11 +47,11 @@ if __name__ == "__main__":
 
     events_list = [
         "GW150914-v3",
-        "GW190521-v2",
+        # "GW190521-v2",
     ]
     detectors_list = [
         "L1",
-        "H1",
+        # "H1",
     ]
     detectors_names = ["LIGO Livingston", "LIGO Hanford"]
     # preparing for plot
@@ -61,32 +62,36 @@ if __name__ == "__main__":
         figsize=((scale + 1) * len(detectors_list), scale * len(events_list)),
     )
 
-    sampling_rate = INT_PRECISION(CONFIG["signal.preprocessing"]["NewSamplingRate"])
+    sampling_rate = numpy.int32(CONFIG["signal.preprocessing"]["NewSamplingRate"])
     data_collection = signal.get_data_from_gwosc(
         events_list,
         detectors_list,
         verbose=True,
     )
 
-    alpha = FLOAT_PRECISION(CONFIG["computation.parameters"]["Alpha"])
+    alpha = numpy.float32(CONFIG["computation.parameters"]["Alpha"])
+    number_of_Qs: int = numpy.int32(CONFIG["computation.parameters"]["N_q"])
 
     print(f"alpha is currently set to: {alpha:.2e}")
     print(f"sampling rate is currently set to: {sampling_rate}")
 
     # print(f"Duration of segment extracted from gwosc: {duration:.2f} s")
-    t0 = time()
     for i, event in enumerate(events_list):
         for j, detector in enumerate(detectors_list):
             time_series = signal.preprocessing(
                 data_collection[event][detector]["time_serie"],
                 data_collection[event][detector]["gps_time"],
             )
-            signal_strain = cupy.array(time_series.value)
-            time_axis = cupy.array(time_series.times.value)
+            signal_strain = numpy.array(time_series.value)
+            time_axis = numpy.array(time_series.times.value)
             phi_range = [30, 500]
             Q_range = [2 * numpy.pi, 6 * numpy.pi]
             p_range = [0, 1]
-            best_Q, best_p, coords = transform.fit_qp(
+            (
+                best_Q,
+                best_p,
+                coords,
+            ) = transform.fit_qp(
                 signal_strain,
                 time_axis,
                 Q_range,
@@ -97,18 +102,23 @@ if __name__ == "__main__":
             print(f"Best fit for Q and p: ({best_Q:.3f}, {best_p:.3f})")
 
             # preparing data for scan
-            signal_fft = cufft.fft(signal_strain).astype(COMPLEX_PRECISION)
-            fft_frequencies = cupy.array(
-                cufft.fftfreq(len(signal_strain)) * sampling_rate, dtype=FLOAT_PRECISION
-            )
+            signal_fft = scipy.fft.fft(signal_strain).astype(numpy.complex64)
+            fft_frequencies = (
+                scipy.fft.fftfreq(len(signal_strain)) * sampling_rate
+            ).astype(numpy.float32)
+
             time_series_duration = time_axis.max() - time_axis.min()
-            phi_axis = transform.get_phi_axis(
+            phi_axis = build_frequency_axis(
                 phi_range,
-                Q_range,
-                p_range,
+                best_Q,
+                best_p,
                 time_series_duration,
                 sampling_rate,
             )
+
+            signal_fft = cupy.array(signal_fft)
+            fft_frequencies = cupy.array(fft_frequencies)
+            phi_axis = cupy.array(phi_axis)
 
             tau_phi_plane = transform.qp_transform(
                 signal_fft,
@@ -132,42 +142,45 @@ if __name__ == "__main__":
                 ax = axis[i, j]
 
             ax.pcolormesh(
-                time_axis.get(),
+                time_axis,
                 phi_axis.get(),
                 energy.get(),
                 cmap="viridis",
             )
-            ax.scatter(coords[0].get(), coords[1].get(), c="red")
+            ax.scatter(coords[0], coords[1], c="red")
 
             ax.set_yscale("log")
             if i == 0:
                 ax.set_title(detectors_names[j])
 
+            # =========================
+            # Benchmarking
+
+            # performing qp-transform
+            Q_values = cupy.linspace(
+                Q_range[0], Q_range[1], number_of_Qs, dtype=numpy.float32
+            )
+            print(f"Performing benchmarks on event {event}, at {detectors_names[j]}")
+            print(
+                benchmark(
+                    transform.fit_qp,
+                    (
+                        signal_strain,
+                        time_axis,
+                        Q_range,
+                        p_range,
+                        phi_range,
+                    ),
+                    n_repeat=50,
+                    n_warmup=3,
+                )
+            )
+
+            # max_idx = numpy.unravel_index(numpy.argmax(energy, axis=None), energy.shape)
+            # print(f"\nMaximum energy value: {energy[max_idx]: .2f}")
+            # CRs = (energy - numpy.median(energy)) / numpy.median(energy)
+            # max_idx = numpy.unravel_index(numpy.argmax(CRs, axis=None), CRs.shape)
+            # print(f"\nCR: {CRs[max_idx] : .2f}")
+
     plt.tight_layout()
     plt.show()
-
-    # =========================
-    # Benchmarking
-
-    # performing qp-transform
-    # print(f"Performing benchmarks on event {event}, at {detectors_names[j]}")
-    # print(
-    #     benchmark(
-    #         transform.fit_qp,
-    #         (
-    #             signal_strain,
-    #             time_axis,
-    #             [2 * numpy.pi, 6 * numpy.pi],
-    #             [0, 1],
-    #             [30, 500],
-    #         ),
-    #         n_repeat=5,
-    #         n_warmup=1,
-    #     )
-    # )
-
-    # max_idx = numpy.unravel_index(numpy.argmax(energy, axis=None), energy.shape)
-    # print(f"\nMaximum energy value: {energy[max_idx]: .2f}")
-    # CRs = (energy - numpy.median(energy)) / numpy.median(energy)
-    # max_idx = numpy.unravel_index(numpy.argmax(CRs, axis=None), CRs.shape)
-    # print(f"\nCR: {CRs[max_idx] : .2f}")

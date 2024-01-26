@@ -39,32 +39,21 @@ from enum import Enum
 import cupy
 from cupy import cuda
 
+# cpu
+import numpy
+
 # tables
 import polars
 
+PATH_TO_SETTINGS = PATH_TO_MASTER + "/config.ini"
+CONFIG = configparser.ConfigParser()
+CONFIG.read(PATH_TO_SETTINGS)
 
-class FloatPrecision(Enum):
-    FLOAT16 = cupy.float16
-    FLOAT32 = cupy.float32
-    FLOAT64 = cupy.float64
-
-
-class IntPrecision(Enum):
-    INT16 = cupy.int16
-    INT32 = cupy.int32
-    INT64 = cupy.int64
-
-
-class ComplexPrecision(Enum):
-    COMPLEX64 = cupy.complex64
-    COMPLEX128 = cupy.complex128
-
-
-FLOAT_PRECISION = FloatPrecision[config["numeric.precision"]["FloatPrecision"]].value
-INT_PRECISION = IntPrecision[config["numeric.precision"]["IntPrecision"]].value
-COMPLEX_PRECISION = ComplexPrecision[
-    config["numeric.precision"]["ComplexPrecision"]
-].value
+BLOCK_SHAPE = (
+    numpy.int32(CONFIG["cuda"]["BlockSizeX"]),
+    numpy.int32(CONFIG["cuda"]["BlockSizeY"]),
+    numpy.int32(CONFIG["cuda"]["BlockSizeZ"]),
+)
 
 
 @dataclass

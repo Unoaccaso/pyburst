@@ -30,8 +30,6 @@ import cupy.typing
 # cpu section
 import numpy
 import numpy.typing
-import scipy.fft
-import matplotlib.pyplot as plt
 from tqdm import tqdm
 
 # fft computation
@@ -475,15 +473,6 @@ def fit_qp(
             time_axis,
             kernel_dim=integration_kernel_size,
         )
-        # plt.pcolormesh(
-        #     time_axis.get()[integration_kernel_size:-(integration_kernel_size)],
-        #     phi_axis.get()[integration_kernel_size:-(integration_kernel_size)],
-        #     energy_density.get()[25],
-        #     cmap="viridis",
-        # )
-        # plt.yscale("log")
-        # plt.colorbar()
-        # plt.show()
 
         loudest_pixel = cupy.unravel_index(
             cupy.argmax(energy_density), energy_density.shape
