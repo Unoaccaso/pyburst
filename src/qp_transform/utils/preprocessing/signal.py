@@ -50,6 +50,8 @@ def get_data_from_gwosc(
     for event_name in event_names:
         out_data_dict[event_name] = {}
         # sanity check, looking inside gwosc to make sure that event exists
+        if verbose:
+            print(f"Checking if data exists...")
         assert (
             event_name in gwosc.datasets.find_datasets()
         ), f"The event {event_name} is not in the gwosc dataset."
@@ -62,7 +64,7 @@ def get_data_from_gwosc(
 
         for detector in detectors:
             if verbose:
-                print(f"Downloaing '{event_name}' data from '{detector}'.")
+                print(f"Downloaing '{event_name}' data from '{detector}'...")
             signal_data = gwpy.timeseries.TimeSeries.fetch_open_data(
                 detector, *gps_time_segment, verbose=verbose
             )

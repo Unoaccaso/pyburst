@@ -31,7 +31,7 @@ CONFIG.read(PATH_TO_THIS + "/config.ini")
 
 
 # custom modules
-from utils import transform
+from utils import transform, filter
 from utils.preprocessing import signal, build_frequency_axis
 
 # demo
@@ -55,14 +55,15 @@ if __name__ == "__main__":
     ]
     detectors_names = ["LIGO Livingston", "LIGO Hanford"]
     # preparing for plot
-    scale = 4
-    fig, axis = plt.subplots(
-        len(events_list),
-        len(detectors_list),
-        figsize=((scale + 1) * len(detectors_list), scale * len(events_list)),
-    )
+    scale = 10
+    # fig, axis = plt.subplots(
+    #     len(events_list),
+    #     len(detectors_list),
+    #     figsize=((scale + 1) * len(detectors_list), scale * len(events_list)),
+    # )
 
     sampling_rate = numpy.int32(CONFIG["signal.preprocessing"]["NewSamplingRate"])
+
     data_collection = signal.get_data_from_gwosc(
         events_list,
         detectors_list,
@@ -79,7 +80,7 @@ if __name__ == "__main__":
     for i, event in enumerate(events_list):
         for j, detector in enumerate(detectors_list):
             time_series = signal.preprocessing(
-                data_collection[event][detector]["time_serie"],
+                data_collection[event][detector]["time_series"],
                 data_collection[event][detector]["gps_time"],
             )
             signal_strain = numpy.array(time_series.value)
@@ -114,6 +115,7 @@ if __name__ == "__main__":
                 best_p,
                 time_series_duration,
                 sampling_rate,
+                alpha=0.01,
             )
 
             signal_fft = cupy.array(signal_fft)
@@ -124,57 +126,85 @@ if __name__ == "__main__":
                 signal_fft,
                 fft_frequencies,
                 phi_axis,
-                best_Q,
-                best_p,
+                numpy.float32(10),
+                numpy.float32(0.2),
                 sampling_rate,
             )
-
             energy = cupy.abs(tau_phi_plane) ** 2
 
-            # plotting region
-            if (len(events_list) == 1) and (len(detectors_list) == 1):
-                ax = axis
-            elif len(events_list) == 1:
-                ax = axis[j]
-            elif len(detectors_list) == 1:
-                ax = axis[i]
-            else:
-                ax = axis[i, j]
+            filtered_signal, outliers, outliers_phi, contour = filter.filter(
+                cupy.array(signal_fft),
+                cupy.array(fft_frequencies),
+                phi_axis,
+                time_axis,
+                best_Q,
+                best_p,
+                energy,
+                2,
+            )
 
-            ax.pcolormesh(
+            # plt.plot(time_axis, signal_strain)
+            # plt.plot(time_axis, filtered_signal.get())
+            # plt.show()
+
+            # plotting region
+            # if (len(events_list) == 1) and (len(detectors_list) == 1):
+            #     ax = axis
+            # elif len(events_list) == 1:
+            #     ax = axis[j]
+            # elif len(detectors_list) == 1:
+            #     ax = axis[i]
+            # else:
+            #     ax = axis[i, j]
+            plt.figure(figsize=(20, 20))
+            plt.pcolormesh(
                 time_axis,
                 phi_axis.get(),
-                energy.get(),
-                cmap="viridis",
+                contour.get(),
+                # cmap="viridis",
             )
-            ax.scatter(coords[0], coords[1], c="red")
+            plt.pcolormesh(
+                time_axis,
+                phi_axis.get(),
+                (energy).get(),
+                # cmap="viridis",
+                alpha=0.8,
+            )
+            plt.vlines(time_axis[outliers.get()], 30, 500)
+            plt.hlines(outliers_phi.get(), time_axis.min(), time_axis.max(), lw=7)
+            plt.xlim(1126259462 + numpy.array([0.289, 0.290]))
+            plt.ylim([20, 510])
+            plt.yscale("log")
+            plt.show()
 
-            ax.set_yscale("log")
-            if i == 0:
-                ax.set_title(detectors_names[j])
+            # ax.plot(time_axis[borders[:, 1].get()], phi_axis[borders[:, 0]].get())
+
+            # ax.set_xscale("log")
+            # if i == 0:
+            #     ax.set_title(detectors_names[j])
 
             # =========================
             # Benchmarking
 
             # performing qp-transform
-            Q_values = cupy.linspace(
-                Q_range[0], Q_range[1], number_of_Qs, dtype=numpy.float32
-            )
-            print(f"Performing benchmarks on event {event}, at {detectors_names[j]}")
-            print(
-                benchmark(
-                    transform.fit_qp,
-                    (
-                        signal_strain,
-                        time_axis,
-                        Q_range,
-                        p_range,
-                        phi_range,
-                    ),
-                    n_repeat=50,
-                    n_warmup=3,
-                )
-            )
+            # Q_values = cupy.linspace(
+            #     Q_range[0], Q_range[1], number_of_Qs, dtype=numpy.float32
+            # )
+            # print(f"Performing benchmarks on event {event}, at {detectors_names[j]}")
+            # print(
+            #     benchmark(
+            #         transform.fit_qp,
+            #         (
+            #             signal_strain,
+            #             time_axis,
+            #             Q_range,
+            #             p_range,
+            #             phi_range,
+            #         ),
+            #         n_repeat=50,
+            #         n_warmup=3,
+            #     )
+            # )
 
             # max_idx = numpy.unravel_index(numpy.argmax(energy, axis=None), energy.shape)
             # print(f"\nMaximum energy value: {energy[max_idx]: .2f}")
@@ -182,5 +212,5 @@ if __name__ == "__main__":
             # max_idx = numpy.unravel_index(numpy.argmax(CRs, axis=None), CRs.shape)
             # print(f"\nCR: {CRs[max_idx] : .2f}")
 
-    plt.tight_layout()
-    plt.show()
+    # plt.tight_layout()
+    # plt.show()

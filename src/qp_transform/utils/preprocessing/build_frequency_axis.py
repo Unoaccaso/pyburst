@@ -52,13 +52,13 @@ def build_frequency_axis(
     if isinstance(Q_values, list):
         Q_min = Q_values[0]
         Q_max = Q_values[1]
-    elif isinstance(Q_values, numpy.float32):
+    else:
         Q_min = Q_values
         Q_max = Q_values
 
     if isinstance(p_values, list):
         p_min = p_values[0]
-    elif isinstance(p_values, numpy.float32):
+    else:
         p_min = p_max = p_values
 
     assert Q_min >= 2 * numpy.pi, f"Q must be bigger then 2pi"

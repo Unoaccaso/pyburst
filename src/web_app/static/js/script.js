@@ -271,8 +271,8 @@ $(document).ready(function () {
                 event: selectedEvent
             },
             success: function (response) {
-                // Utilizza la funzione per aggiornare il contenuto di main-image
-                updateMainImage(response.image);
+                // Utilizza la funzione per aggiornare dinamicamente l'immagine
+                updateMainImage(response.script, response.div);
             },
             error: function (xhr, status, error) {
                 console.error("AJAX request failed:", status, error);
@@ -287,9 +287,18 @@ $(document).ready(function () {
         });
     }
 
-    function updateMainImage(imageData) {
-        $(".main-image").html('<img id="generatedImage" src="data:image/png;base64,' + imageData + '" alt="Generated Energy Plane">');
-        // Mostra l'immagine generata
+    // Funzione per aggiornare dinamicamente l'immagine quando è pronta
+    function updateMainImage(script, div) {
+        // Sostituisci il contenuto con lo script e il div del grafico Bokeh
+        $(".main-image").html('<div id="bokeh-plot">' + div + '</div>');
+
+        // Crea una nuova funzione usando lo script Bokeh
+        var bokehFunction = new Function(script);
+
+        // Esegui la funzione per visualizzare il grafico Bokeh
+        bokehFunction();
+
+        // Puoi nascondere o mostrare l'elemento a seconda delle tue esigenze
         showImage();
     }
 
@@ -304,11 +313,11 @@ $(document).ready(function () {
     }
 
     function showImage() {
-        $("#generatedImage").show();
+        $("#bokeh-plot").show();
     }
 
     function hideImage() {
-        $("#generatedImage").hide();
+        $("#bokeh-plot").hide();
     }
 
     function downloadError() {

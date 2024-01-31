@@ -159,7 +159,7 @@ def reprocess_data(
     )
 
     out_data = {
-        "unprocessed_timeseries": cached_signal,
+        "unumpyrocessed_timeseries": cached_signal,
         "strain": processed_signal.value,
         "time_axis": processed_signal.times.value,
         "sampling_rate": numpy.int32(
@@ -199,14 +199,14 @@ def generate_energy_plane(
         alpha_value,
     )
 
-    signal_fft = cupy.array(signal_fft)
-    fft_frequencies = cupy.array(fft_frequencies)
-    phi_axis = cupy.array(phi_axis)
+    signal_fft_GPU = cupy.array(signal_fft)
+    fft_frequencies_GPU = cupy.array(fft_frequencies)
+    phi_axis_GPU = cupy.array(phi_axis)
 
     tau_phi_plane = transform.qp_transform(
-        signal_fft,
-        fft_frequencies,
-        phi_axis,
+        signal_fft_GPU,
+        fft_frequencies_GPU,
+        phi_axis_GPU,
         q_value,
         p_value,
         sampling_rate,
@@ -215,9 +215,9 @@ def generate_energy_plane(
     energy_plane = cupy.abs(tau_phi_plane) ** 2
 
     result = {
-        "energy_plane": energy_plane.tolist(),
-        "time_axis": time_axis.tolist(),
-        "phi_axis": phi_axis.tolist(),
+        "energy_plane": energy_plane.get(),
+        "time_axis": time_axis,
+        "phi_axis": phi_axis,
     }
 
     return result
@@ -262,25 +262,15 @@ def check_and_download_timeseries():
     tau_min = numpy.int32(request.form.get("tau_min"))
     tau_max = numpy.int32(request.form.get("tau_max"))
 
-    # Verifica se i dati sono già presenti nella cache
-    if (
-        detector_id in CACHED_TIME_SERIES
-        and event_name in CACHED_TIME_SERIES[detector_id]
-    ):
-        # I dati sono già presenti nella cache, restituisci direttamente i dati esistenti
-        data = CACHED_TIME_SERIES[detector_id][event_name]
-        return jsonify({"success": True, "message": "Data already in cache"})
-    else:
-        # I dati non sono presenti nella cache, effettua il download e aggiornamento della cache
-        result = download_signal_and_preprocess(
-            detector_id, event_name, 1, tau_min, tau_max
-        )
+    result = download_signal_and_preprocess(
+        detector_id, event_name, 1, tau_min, tau_max
+    )
 
-        if result["success"]:
-            CACHED_TIME_SERIES.setdefault(detector_id, {})[event_name] = result["data"]
-            return jsonify({"success": True, "message": "Data processed"})
-        else:
-            return jsonify({"success": False, "message": "Failed to download data"})
+    if result["success"]:
+        CACHED_TIME_SERIES.setdefault(detector_id, {})[event_name] = result["data"]
+        return jsonify({"success": True, "message": "Data processed"})
+    else:
+        return jsonify({"success": False, "message": result["message"]})
 
 
 @app.route("/reselect_time_interval")
@@ -299,6 +289,11 @@ def reselect_time_interval():
         return jsonify({"success": False, "message": "Recropping failed"})
 
 
+from bokeh.plotting import figure
+from bokeh.models import LogColorMapper
+from bokeh.embed import components
+
+
 @app.route("/generate_energy_plane", methods=["POST"])
 def generate_energy_plane_route():
     q_value = numpy.float32(request.form.get("qValue"))
@@ -315,43 +310,40 @@ def generate_energy_plane_route():
         energy_plane = result["energy_plane"]
         time_axis = result["time_axis"]
         phi_axis = result["phi_axis"]
-        with app.app_context():
-            fig, ax = plt.subplots()
-            im = ax.pcolormesh(
-                time_axis,
-                phi_axis,
-                energy_plane,
-                cmap="viridis",
-                rasterized=True,
-                shading="auto",
-            )
 
-            # Aggiungi l'asse y in scala logaritmica
-            ax.set_yscale("log")
+        # Creazione del grafico Bokeh
+        p = figure(
+            title="Energy Plane Heatmap",
+            x_axis_label="Time Axis",
+            y_axis_label="Phi Axis",
+            width=800,
+            height=600,
+            toolbar_location="above",
+        )
 
-            # Aggiungi il codice per rendere trasparente il plot
-            ax.patch.set_alpha(0)
-            im.set_edgecolor("face")
+        # Utilizza LogColorMapper per l'asse y in scala logaritmica
+        mapper = LogColorMapper(
+            palette="Viridis256",
+            low=numpy.min(energy_plane),
+            high=numpy.max(energy_plane),
+        )
+        p.image(
+            image=[energy_plane],
+            x=numpy.min(time_axis),
+            y=numpy.min(phi_axis),
+            dw=numpy.ptp(
+                time_axis
+            ),  # Peak-to-peak, equivalent to numpy.max(time_axis) - numpy.min(time_axis)
+            dh=numpy.ptp(
+                phi_axis
+            ),  # Peak-to-peak, equivalent to numpy.max(phi_axis) - numpy.min(phi_axis)
+            color_mapper=mapper,
+        )
 
-            # Imposta il colore di sfondo dell'intera figura
-            fig.patch.set_facecolor(
-                "#f5f5f5"
-            )  # Sostituisci '#ff0000' con il colore desiderato
-
-            # Salva l'immagine con una risoluzione più elevata
-            img_io = BytesIO()
-            plt.savefig(
-                img_io,
-                format="png",
-                bbox_inches="tight",
-                pad_inches=0.2,
-            )
-            img_io.seek(0)
-            plt.clf()
-
-            image_base64 = base64.b64encode(img_io.read()).decode("utf-8")
-
-            return {"energy_plane": energy_plane, "image": image_base64}
+        # Salva il codice HTML e JavaScript del grafico Bokeh
+        script, div = components(p)
+        print(script)
+        return {"script": script, "div": div}
 
     else:
         return jsonify({"error": "Failed to generate energy plane"})
