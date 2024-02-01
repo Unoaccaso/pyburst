@@ -7,9 +7,8 @@ sys.path.append(PATH_TO_MASTER)
 
 from qp_transform.utils import preprocessing, transform, filter
 
-from bokeh.transform import linear_cmap
 from bokeh.models import ColorBar
-from bokeh.plotting import figure, curdoc
+from bokeh.plotting import figure
 import bokeh.models as models
 from bokeh.layouts import column, row
 from bokeh.server.server import Server
@@ -19,7 +18,6 @@ from bokeh.application.handlers.function import FunctionHandler
 import gwosc.datasets
 
 import numpy
-import scipy
 import cupy
 
 
@@ -50,13 +48,13 @@ def download_signal_and_preprocess(detector_id, event_name, runs, tau_min, tau_m
     max_runs = 100
 
     try:
-        signal = preprocessing.signal.get_data_from_gwosc(
+        signal = preprocessing.gw_signal.get_data_from_gwosc(
             [event_name],
             [detector_id],
             segment_duration=20,
         )
 
-        processed_signal = preprocessing.signal.preprocessing(
+        processed_signal = preprocessing.gw_signal.preprocessing(
             signal[event_name][detector_id]["time_series"],
             signal[event_name][detector_id]["gps_time"],
             crop=True,
@@ -184,7 +182,7 @@ def filtered_signal(
     time_axis = CACHED_TIME_SERIES[detector_id][event_name]["time_axis"]
     signal_fft_GPU = CACHED_TIME_SERIES[detector_id][event_name]["fft_value_GPU"]
     fft_frequencies_GPU = CACHED_TIME_SERIES[detector_id][event_name]["fft_freqs_GPU"]
-    filtered_signal = filter.filter(
+    filtered_signal = filter.apply_filter(
         signal_fft_GPU,
         fft_frequencies_GPU,
         phi_axis_GPU,
@@ -363,7 +361,7 @@ def main_func(doc):
             "unprocessed_timeseries"
         ]
 
-        processed_signal = preprocessing.signal.preprocessing(
+        processed_signal = preprocessing.gw_signal.preprocessing(
             cached_signal["time_series"],
             cached_signal["gps_time"],
             crop=True,

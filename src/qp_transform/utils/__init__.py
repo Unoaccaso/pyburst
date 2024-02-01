@@ -14,5 +14,5 @@ PURPOSE. See the GNU Affero General Public License for more details.
 You should have received a copy of the GNU Affero General Public License
 along with this program. If not, see <https: //www.gnu.org/licenses/>.
 """
-from . import commons, transform, preprocessing, filter
-from .filter.find_boudaries import find_boundaries
+from . import commons, transform, preprocessing, qp_filter
+from .qp_filter.find_boudaries import find_boundaries

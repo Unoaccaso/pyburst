@@ -36,7 +36,6 @@ from typing import Union
 from enum import Enum
 
 # cuda
-import cupy
 from cupy import cuda
 
 # cpu
@@ -54,6 +53,8 @@ BLOCK_SHAPE = (
     numpy.int32(CONFIG["cuda"]["BlockSizeY"]),
     numpy.int32(CONFIG["cuda"]["BlockSizeZ"]),
 )
+
+DETECTORS = ["L1", "H1", "V1"]
 
 
 @dataclass

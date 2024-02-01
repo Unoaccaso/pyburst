@@ -19,11 +19,9 @@ import sys
 import os.path
 
 PATH_TO_THIS = os.path.dirname(__file__)
-PATH_TO_MASTER = PATH_TO_THIS + "/../"
+PATH_TO_MASTER = PATH_TO_THIS + "/../../"
 sys.path.append(PATH_TO_MASTER)
 
-# type hinting
-from typing import Union
 
 # signal
 import gwosc.datasets

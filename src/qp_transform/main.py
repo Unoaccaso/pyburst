@@ -20,6 +20,8 @@ import os.path
 
 from time import time
 
+from qp_transform.utils.preprocessing import gw_signal
+
 PATH_TO_THIS = os.path.dirname(__file__)
 
 
@@ -32,7 +34,7 @@ CONFIG.read(PATH_TO_THIS + "/config.ini")
 
 # custom modules
 from utils import transform, filter
-from utils.preprocessing import signal, build_frequency_axis
+from utils.preprocessing import build_frequency_axis
 
 # demo
 import cupy, numpy, scipy, cupy.fft
@@ -64,7 +66,7 @@ if __name__ == "__main__":
 
     sampling_rate = numpy.int32(CONFIG["signal.preprocessing"]["NewSamplingRate"])
 
-    data_collection = signal.get_data_from_gwosc(
+    data_collection = gw_signal.get_data_from_gwosc(
         events_list,
         detectors_list,
         verbose=True,
@@ -79,7 +81,7 @@ if __name__ == "__main__":
     # print(f"Duration of segment extracted from gwosc: {duration:.2f} s")
     for i, event in enumerate(events_list):
         for j, detector in enumerate(detectors_list):
-            time_series = signal.preprocessing(
+            time_series = gw_signal.preprocessing(
                 data_collection[event][detector]["time_series"],
                 data_collection[event][detector]["gps_time"],
             )
@@ -132,7 +134,7 @@ if __name__ == "__main__":
             )
             energy = cupy.abs(tau_phi_plane) ** 2
 
-            filtered_signal, outliers, outliers_phi, contour = filter.filter(
+            filtered_signal, outliers, outliers_phi, contour = filter.apply_filter(
                 cupy.array(signal_fft),
                 cupy.array(fft_frequencies),
                 phi_axis,

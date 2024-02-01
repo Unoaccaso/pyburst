@@ -15,4 +15,4 @@ along with this program. If not, see <https: //www.gnu.org/licenses/>.
 """
 
 from .build_frequency_axis import build_frequency_axis
-from . import signal
+from . import gw_signal
