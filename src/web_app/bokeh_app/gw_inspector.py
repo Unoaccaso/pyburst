@@ -5,7 +5,7 @@ PATH_TO_THIS = os.path.dirname(__file__)
 PATH_TO_MASTER = os.path.join(PATH_TO_THIS, "../..")
 sys.path.append(PATH_TO_MASTER)
 
-from qp_transform.utils import preprocessing, transform, filter
+from qp_transform.utils import preprocessing, transform, qp_filter
 
 from bokeh.models import ColorBar
 from bokeh.plotting import figure
@@ -29,29 +29,42 @@ def event_exists_for_run(detector, run):
     )
 
 
+USE_LOCAL_DATA = False
+LOCAL_DATA_PATH = "/leonardo_work/uTS23_Trovato_0/felicetti_tmp/qp_transform_data"
+
 DETECTOR_OPTIONS = [
     ("L1", "Ligo Livingston (L1)"),
     ("H1", "Ligo Hanford (H1)"),
     ("V1", "Virgo (V1)"),
 ]
 
-DEFAULT_RUN_LIST = [
-    (run, run)
-    for run in gwosc.datasets.find_datasets(detector=DETECTOR_OPTIONS[0][0], type="run")
-    if event_exists_for_run(DETECTOR_OPTIONS[0][0], run)
-]
+if USE_LOCAL_DATA:
+    DEFAULT_RUN_LIST = []
+else:
+    DEFAULT_RUN_LIST = [
+        (run, run)
+        for run in gwosc.datasets.find_datasets(
+            detector=DETECTOR_OPTIONS[0][0], type="run"
+        )
+        if event_exists_for_run(DETECTOR_OPTIONS[0][0], run)
+    ]
 
 CACHED_TIME_SERIES = {}
 
 
-def download_signal_and_preprocess(detector_id, event_name, runs, tau_min, tau_max):
+def download_signal_and_preprocess(
+    detector_id, event_name, runs, tau_min, tau_max, source="remote", local_path=""
+):
     max_runs = 100
 
     try:
+        segment_duration = 20.0
         signal = preprocessing.gw_signal.get_data_from_gwosc(
             [event_name],
             [detector_id],
-            segment_duration=20,
+            segment_duration=segment_duration,
+            source=source,
+            local_path=local_path,
         )
 
         processed_signal = preprocessing.gw_signal.preprocessing(
@@ -63,8 +76,8 @@ def download_signal_and_preprocess(detector_id, event_name, runs, tau_min, tau_m
             resample=True,
             new_sampling_rate=4096,
             whitening=True,
+            segment_duration=segment_duration,
         )
-
         strain_GPU = cupy.array(processed_signal.value)
 
         out_data = {
@@ -88,20 +101,28 @@ def download_signal_and_preprocess(detector_id, event_name, runs, tau_min, tau_m
         }
         return {"success": True, "data": out_data}
 
-    except:
+    except ValueError:
         # TODO: error handling
         if runs < max_runs:
-            print(f"Failed downloading {runs} / {max_runs} times.")
+            print(f"Failed loading data {runs} / {max_runs} times.")
             return download_signal_and_preprocess(
-                detector_id, event_name, runs + 1, tau_min, tau_max
+                detector_id,
+                event_name,
+                runs + 1,
+                tau_min,
+                tau_max,
+                source=source,
+                local_path=local_path,
             )
         else:
-            print(f"Failed downloading too many times")
+            print(f"Failed loading data too many times")
             # TODO: error handling
             return {"success": False}
 
 
-def check_and_download_timeseries(detector_id, event_name, tau_min, tau_max):
+def check_and_download_timeseries(
+    detector_id, event_name, tau_min, tau_max, source="remote", local_path=""
+):
     # Verifica se i dati sono già presenti nella cache
     if (
         detector_id in CACHED_TIME_SERIES
@@ -114,7 +135,13 @@ def check_and_download_timeseries(detector_id, event_name, tau_min, tau_max):
     else:
         # I dati non sono presenti nella cache, effettua il download e aggiornamento della cache
         result = download_signal_and_preprocess(
-            detector_id, event_name, 1, tau_min, tau_max
+            detector_id,
+            event_name,
+            1,
+            tau_min,
+            tau_max,
+            source=source,
+            local_path=local_path,
         )
 
         if result["success"]:
@@ -182,7 +209,7 @@ def filtered_signal(
     time_axis = CACHED_TIME_SERIES[detector_id][event_name]["time_axis"]
     signal_fft_GPU = CACHED_TIME_SERIES[detector_id][event_name]["fft_value_GPU"]
     fft_frequencies_GPU = CACHED_TIME_SERIES[detector_id][event_name]["fft_freqs_GPU"]
-    filtered_signal = filter.apply_filter(
+    filtered_signal = qp_filter.filter(
         signal_fft_GPU,
         fft_frequencies_GPU,
         phi_axis_GPU,
@@ -210,9 +237,9 @@ def main_func(doc):
             phi_range=phi_range_slider.value,
         )
 
-        CACHED_TIME_SERIES[detector_menu.value][event_menu.value][
-            "energy_plane"
-        ] = result["energy_plane"]
+        CACHED_TIME_SERIES[detector_menu.value][event_menu.value]["energy_plane"] = (
+            result["energy_plane"]
+        )
         CACHED_TIME_SERIES[detector_menu.value][event_menu.value]["phi_axis"] = result[
             "phi_axis"
         ]
@@ -284,21 +311,27 @@ def main_func(doc):
         signal_plot.y_range.range_padding = 0
 
     def update_run_list(attr, old, new):
-        all_runs = gwosc.datasets.find_datasets(detector=new, type="run")
-        runs = [(run, run) for run in all_runs if event_exists_for_run(new, run)]
-        run_menu.options = runs
-        run_menu.value = runs[0][0]
-        update_event_list("", "", run_menu.value)
+        if USE_LOCAL_DATA:
+            pass
+        else:
+            all_runs = gwosc.datasets.find_datasets(detector=new, type="run")
+            runs = [(run, run) for run in all_runs if event_exists_for_run(new, run)]
+            run_menu.options = runs
+            run_menu.value = runs[0][0]
+            update_event_list("", "", run_menu.value)
 
     def update_event_list(attr, old, new):
-        all_events = gwosc.datasets.find_datasets(
-            detector=detector_menu.value, type="event"
-        )
-        events = [
-            (event, event)
-            for event in all_events
-            if gwosc.datasets.run_at_gps(gwosc.datasets.event_gps(event)) == new
-        ]
+        if USE_LOCAL_DATA:
+            events = os.listdir(os.path.join(LOCAL_DATA_PATH, detector_menu.value))
+        else:
+            all_events = gwosc.datasets.find_datasets(
+                detector=detector_menu.value, type="event"
+            )
+            events = [
+                (event, event)
+                for event in all_events
+                if gwosc.datasets.run_at_gps(gwosc.datasets.event_gps(event)) == new
+            ]
         event_menu.options = events
         event_menu.value = events[0][0]
         check_and_download_timeseries(
@@ -504,7 +537,7 @@ if __name__ == "__main__":
     # Imposta il server Bokeh
     handler = FunctionHandler(main_func)
     app = Application(handler)
-    server = Server({"/": app}, num_procs=1)
+    server = Server({"/": app}, num_procs=1, port=5005)
     server.start()
 
     server.io_loop.add_callback(server.show, "/")

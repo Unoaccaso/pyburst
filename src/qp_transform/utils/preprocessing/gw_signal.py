@@ -1,4 +1,5 @@
 """"""
+
 """
 Copyright (C) 2024 Riccardo Felicetti <https://github.com/Unoaccaso>
 
@@ -39,6 +40,8 @@ def get_data_from_gwosc(
     event_names: list[str],
     detectors: list[str],
     segment_duration: int = numpy.int32(CONFIG["signal.download"]["SegmentDuration"]),
+    source="remote",
+    local_path="",
     verbose: bool = True,
 ):
     # making sure that typing is correct
@@ -50,32 +53,57 @@ def get_data_from_gwosc(
         # sanity check, looking inside gwosc to make sure that event exists
         if verbose:
             print(f"Checking if data exists...")
-        assert (
-            event_name in gwosc.datasets.find_datasets()
-        ), f"The event {event_name} is not in the gwosc dataset."
 
-        gps_time = gwosc.datasets.event_gps(event_name)
-        gps_time_segment = (
-            gps_time - segment_duration / 2,
-            gps_time + segment_duration / 2,
-        )
+        if source == "remote":
+            print(event_name)
+            assert (
+                event_name in gwosc.datasets.find_datasets()
+            ), f"The event {event_name} is not in the gwosc dataset."
 
-        for detector in detectors:
-            if verbose:
-                print(f"Downloaing '{event_name}' data from '{detector}'...")
-            signal_data = gwpy.timeseries.TimeSeries.fetch_open_data(
-                detector, *gps_time_segment, verbose=verbose
+            gps_time = gwosc.datasets.event_gps(event_name)
+            gps_time_segment = (
+                gps_time - segment_duration / 2,
+                gps_time + segment_duration / 2,
             )
-            out_data_dict[event_name][detector] = {}
-            out_data_dict[event_name][detector]["time_series"] = signal_data
-            out_data_dict[event_name][detector]["gps_time"] = gps_time
 
+            for detector in detectors:
+                if verbose:
+                    print(f"Downloaing '{event_name}' data from '{detector}'...")
+                signal_data = gwpy.timeseries.TimeSeries.fetch_open_data(
+                    detector, *gps_time_segment, verbose=verbose
+                )
+
+        elif source == "local":
+            for detector in detectors:
+                detector_database = os.listdir(local_path)
+                assert (
+                    detector in detector_database
+                ), f"{detector} is not in the local database"
+                event_database = os.listdir(os.path.join(local_path, detector))
+                assert (
+                    event_name in event_database
+                ), f"{event_name} does not exist for {detector} in the local database"
+
+                signal_data = gwpy.timeseries.TimeSeries.read(
+                    os.path.join(local_path, detector, event_name, "timeserie.hdf5")
+                )
+
+                gps_time = numpy.float64(
+                    (signal_data.times.value.max() + signal_data.times.value.min()) / 2
+                )
+                signal_data = signal_data.crop(
+                    gps_time - segment_duration / 2, gps_time + segment_duration / 2
+                )
+
+    out_data_dict[event_name][detector] = {}
+    out_data_dict[event_name][detector]["time_series"] = signal_data
+    out_data_dict[event_name][detector]["gps_time"] = gps_time
     return out_data_dict
 
 
 def preprocessing(
     time_series: gwpy.timeseries.TimeSeries,
-    event_gps_time: numpy.float32,
+    event_gps_time: numpy.float64,
     crop: int = int(
         CONFIG["signal.preprocessing"]["Resample"],
     ),
@@ -93,6 +121,9 @@ def preprocessing(
     ),
     whitening: int = int(
         CONFIG["signal.preprocessing"]["Whiten"],
+    ),
+    segment_duration: float = numpy.float32(
+        CONFIG["signal.download"]["SegmentDuration"]
     ),
 ):
     """preprocessing
@@ -124,7 +155,6 @@ def preprocessing(
         The processed data.
     """
     signal_data = time_series
-    segment_duration = numpy.int32(CONFIG["signal.download"]["SegmentDuration"])
 
     # resampling
     if resample:
@@ -132,7 +162,7 @@ def preprocessing(
             numpy.ceil(1.0 / (signal_data.times.value[1] - signal_data.times.value[0]))
             / new_sampling_rate
         ).astype(numpy.int32)
-        x0 = event_gps_time - segment_duration / 2
+        x0 = time_series.times.value[0]
         downsampled_data = scipy.signal.decimate(signal_data, q_value)
 
         signal_data = gwpy.timeseries.TimeSeries(
