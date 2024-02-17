@@ -29,6 +29,9 @@ def event_exists_for_run(detector, run):
     )
 
 
+USE_LOCAL_DATA = False
+LOCAL_DATA_PATH = "/leonardo_work/uTS23_Trovato_0/felicetti_tmp/qp_transform_data"
+
 DETECTOR_OPTIONS = [
     ("L1", "Ligo Livingston (L1)"),
     ("H1", "Ligo Hanford (H1)"),
@@ -41,10 +44,23 @@ DEFAULT_RUN_LIST = [
     if event_exists_for_run(DETECTOR_OPTIONS[0][0], run)
 ]
 
+if USE_LOCAL_DATA:
+    DEFAULT_RUN_LIST = []
+else:
+    DEFAULT_RUN_LIST = [
+        (run, run)
+        for run in gwosc.datasets.find_datasets(
+            detector=DETECTOR_OPTIONS[0][0], type="run"
+        )
+        if event_exists_for_run(DETECTOR_OPTIONS[0][0], run)
+    ]
+
 CACHED_TIME_SERIES = {}
 
 
-def download_signal_and_preprocess(detector_id, event_name, runs, tau_min, tau_max):
+def download_signal_and_preprocess(
+    detector_id, event_name, runs, tau_min, tau_max, source="remote", local_path=""
+):
     max_runs = 100
 
     try:
