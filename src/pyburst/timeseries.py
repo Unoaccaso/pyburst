@@ -1,7 +1,7 @@
 """
 Copyright (C) 2024 Riccardo Felicetti <https://github.com/Unoaccaso>
 
-Created Date: Monday, February 12th 2024, 10:08:37 am
+Created Date: Tuesday, February 13th 2024, 8:15:05 pm
 Author: Riccardo Felicetti
 
 This program is free software: you can redistribute it and/or modify it under
@@ -14,23 +14,77 @@ You should have received a copy of the GNU Affero General Public License
 along with this program. If not, see <https: //www.gnu.org/licenses/>.
 """
 
-import warnings
-
-import xarray
-import gwpy
-import astropy
-import pandas
-
+from dataclasses import dataclass, fields
+import abc
+import typing
 import numpy
 from numpy import float32, float64, int32, int64, complex64, complex128
-
-
+import dask.array
 import cupy
+import warnings
+
+import concurrent.futures
+
+import gwpy.timeseries
+import gwosc.datasets
+import astropy
 
 from ._typing import type_check
 
 
-class TimeSeries:
+_ARRAY_LIKE = typing.Union[
+    numpy.ndarray[float32],
+    numpy.ndarray[float64],
+    dask.array.Array,
+    cupy.typing.NDArray[float32],
+    cupy.typing.NDArray[float64],
+]
+_FLOAT_LIKE = typing.Union[
+    float,
+    float32,
+    float64,
+]
+_INT_LIKE = typing.Union[
+    int,
+    int32,
+    int64,
+]
+
+
+@dataclass
+class BaseSeriesAttrs:
+    """
+    Attributes
+    ----------
+    segment_name : str
+        Name of the segment.
+    detector_id : str
+        Identifier of the detector.
+    detector_name : str
+        Name of the detector.
+    t0_gps : float
+        GPS time of the starting point.
+    duration : float
+        Duration of the time series.
+    dt : float
+        Time resolution.
+    sampling_rate : int
+        Sampling rate.
+    reference_time_gps : float
+        Reference GPS time.
+    """
+
+    segment_name: str
+    detector_id: str
+    detector_name: str
+    t0_gps: float
+    duration: float
+    dt: float
+    sampling_rate: int
+    reference_time_gps: float
+
+
+class TimeSeries(abc.ABC):
 
     _DECODE_DETECTOR = {
         "L1": "Ligo Livingston (L1)",
@@ -38,57 +92,36 @@ class TimeSeries:
         "V1": "Virgo (V1)",
     }
 
+    _CACHED_DATA = {}
+
     @classmethod
-    @type_check(classmethod=True)
-    def _input_check(
+    def _check_input_and_fill(
         cls,
-        gps_times: numpy.ndarray[float32] | numpy.ndarray[float64] | None,
-        dt: float | float32 | float64 | None,
-        sampling_rate: int | int32 | int64 | None,
-        t0_gps: float64 | None,
-        duration: float | float32 | float64 | None,
-        detector_id: str,
-        detector_name: str | None,
-        reference_gps_time: float | float32 | float64 | None,
+        *args,
+        **kwargs,
     ):
-        if not (
-            gps_times is not None or ((dt or sampling_rate) and t0_gps and duration)
-        ):
-            raise ValueError(
-                f"Provide a time array or the correct parameters to build one"
-            )
+
+        new_kwargs = {}
+        gps_time = kwargs["gps_time"]
+        dt = kwargs["dt"]
+        sampling_rate = kwargs["sampling_rate"]
+        duration = kwargs["duration"]
+        t0_gps = kwargs["t0_gps"]
+        detector_id = kwargs["detector_id"]
+        detector_name = kwargs["detector_name"]
+        reference_time_gps = kwargs["reference_time_gps"]
+
         if detector_id not in cls._DECODE_DETECTOR or (
             detector_name is not None
             and detector_name != cls._DECODE_DETECTOR[detector_id]
         ):
-            raise ValueError(f"Check detector ID and/or name")
+            raise ValueError("Check detector ID and/or name")
 
-        if reference_gps_time is not None and (
-            reference_gps_time < t0_gps or reference_gps_time > (t0_gps + duration)
-        ):
-            warnings.warn(
-                f"Reference time {reference_gps_time} is outside of time interval"
-            )
-
-    @classmethod
-    @type_check(classmethod=True)
-    def _fill_missing_params(
-        cls,
-        gps_times: numpy.ndarray[float32] | numpy.ndarray[float64] | None,
-        dt: float | float32 | float64 | None,
-        sampling_rate: int | int32 | int64 | None,
-        t0_gps: float64 | None,
-        duration: float | float32 | float64 | None,
-        detector_id: str,
-        detector_name: str | None,
-        reference_gps_time: float | float32 | float64 | None,
-    ):
-
-        if gps_times is not None:
-            _dt = gps_times[1] - gps_times[0]
-            _sampling_rate = int32(1 / _dt)
-            _t0_gps = gps_times[0]
-            _duration = gps_times.max() - gps_times.min()
+        if gps_time is not None:
+            _dt = gps_time[1] - gps_time[0]
+            _sampling_rate = (1 / _dt).astype(int32)
+            _t0_gps = gps_time[0]
+            _duration = gps_time.max() - gps_time.min()
             if dt is not None and _dt != dt:
                 raise ValueError(
                     f"time data has a dt of {_dt} s, input dt is {dt} s. Please correct!"
@@ -105,164 +138,413 @@ class TimeSeries:
                 raise ValueError(
                     f"time data ha a t0 of {_t0_gps} s, input t0_gps is {t0_gps}. Please correct!"
                 )
-            dt = _dt
-            sampling_rate = _sampling_rate
-            duration = _duration
-            t0_gps = _t0_gps
+            new_kwargs["dt"] = _dt
+            new_kwargs["sampling_rate"] = _sampling_rate
+            new_kwargs["duration"] = _duration
+            new_kwargs["t0_gps"] = _t0_gps
+
         else:
-            t_start = t0_gps
-            t_stop = t0_gps + duration
-            gps_times = numpy.arange(t_start, t_stop, dt)
+            if (
+                (dt is None or sampling_rate is None)
+                and t0_gps is None
+                and duration is None
+            ):
+                raise ValueError(
+                    "Provide a time array or the correct parameters to build one"
+                )
+
+            if dt is None:
+                new_kwargs["dt"] = 1 / sampling_rate
+                warnings.warn(
+                    f"dt value was derived from sampling rate: {1/sampling_rate}"
+                )
+
+            elif sampling_rate is None:
+                new_kwargs["sampling_rate"] = int(1 / dt)
+                warnings.warn(f"sampling rate value was derived from dt: {int(1 / dt)}")
+            elif int(1 / dt) != sampling_rate:
+                raise ValueError(
+                    f"dt: {dt} and sampling_rate: {sampling_rate} are not compatible!"
+                )
+
+        if detector_name is None:
+            new_kwargs["detector_name"] = cls._DECODE_DETECTOR[detector_id]
+
+        if reference_time_gps is None:
+            new_kwargs["reference_time_gps"] = t0_gps + duration / 2
+            warnings.warn(
+                f"Reference time set to half interval: { t0_gps + duration / 2} s. Ensure this is fine."
+            )
+
+        elif reference_time_gps is not None and (
+            reference_time_gps < new_kwargs["t0_gps"]
+            or reference_time_gps > (new_kwargs["t0_gps"] + new_kwargs["duration"])
+        ):
+            warnings.warn(
+                f"Reference time {reference_time_gps} is outside of time interval"
+            )
+
+        return new_kwargs
+
+    @classmethod
+    @type_check(classmethod=True)
+    def from_array(
+        cls,
+        strain: _ARRAY_LIKE,
+        segment_name: str,
+        detector_id: str,
+        gps_time: _ARRAY_LIKE | None = None,
+        reference_time_gps: _FLOAT_LIKE = None,
+        detector_name: str = None,
+        dt: _FLOAT_LIKE = None,
+        sampling_rate: _INT_LIKE = None,
+        t0_gps: _FLOAT_LIKE = None,
+        duration: _FLOAT_LIKE = None,
+    ):
+        """
+        Construct a TimeSeries object from an array.
+
+        Parameters
+        ----------
+        strain : numpy.ndarray[float32 | float64], dask.array.Array, cupy.ndarray[float32]
+            The strain data. The returned TimeSeries object depends on the type of input strain:
+            - If strain is a NumPy array, a ShortSeries object is returned.
+            - If strain is a Dask array or a string, a LongSeries object is returned.
+            - If strain is a CuPy array, a GPUSeries object is returned.
+            The GPUSeries object utilizes GPU computing for array operations.
+            The LongSeries object supports lazy computing with Dask arrays.
+
+        gps_time : numpy.ndarray[float32 | float64], dask.array.Array, cupy.ndarray[float32], optional
+            GPS time array (if available). It must have the same dtype of `strain`.
+            If not provided, it will be calculated when accessed for the first time.
+            Strain and GPS time can be sliced using time indices without immediate calculation of the array axes.
+
+        segment_name : str
+            Name of the segment.
+        detector_id : str
+            Identifier of the detector. Optional if `detector_name` is provided.
+        reference_time_gps : Union[float, float32, float64], optional
+            Reference GPS time.
+        detector_name : str, optional
+            Name of the detector. Required if `detector_id` is provided.
+        dt : Union[float, float32, float64], optional
+            Time resolution. If not provided, it will be calculated based on the sampling rate.
+        sampling_rate : Union[int, int32, int64], optional
+            Sampling rate. If not provided, it will be calculated based on the time resolution.
+        t0_gps : Union[float, float32, float64], optional
+            GPS time of the starting point. Required if `gps_time` is not provided.
+        duration : Union[float, float32, float64], optional
+            Duration of the time series. Required if `gps_time` is not provided.
+
+        Returns
+        -------
+        TimeSeries
+            Time series object.
+
+        Raises
+        ------
+        ValueError
+            If the input parameters are invalid.
+        NotImplementedError
+            If the strain type is not supported.
+
+        Examples
+        --------
+        >>> strain = numpy.random.randn(1000).astype(numpy.float32)
+        >>> t_series = TimeSeries.from_array(
+        ...     strain=strain,
+        ...     segment_name="Test Segment",
+        ...     detector_id="H1",
+        ...     dt=0.001,
+        ...     t0_gps=1000000000.0,
+        ...     duration=1.0,
+        ... )
+        """
+
+        kwargs = {name: value for name, value in locals().items() if name != "cls"}
+
+        new_kwargs = cls._check_input_and_fill(**kwargs)
+        kwargs.update(new_kwargs)
+
+        if isinstance(strain, numpy.ndarray):
+            return ShortSeries(**kwargs)
+        elif isinstance(strain, cupy.ndarray):
+            return GPUSeries(**kwargs)
+        elif isinstance(strain, dask.array.Array | str):
+            return LongSeries(**kwargs)
+        else:
+            raise NotImplementedError(
+                f"{type(strain)} type for strain is not supported."
+            )
+
+    @classmethod
+    @type_check(classmethod=True)
+    def from_gwpy(
+        cls,
+        gwpy_timeseries: gwpy.timeseries.TimeSeries,
+        segment_name: str,
+        detector_id: str,
+        duration: _FLOAT_LIKE | None = None,
+        detector_name: str | None = None,
+        reference_time_gps: _FLOAT_LIKE | None = None,
+        use_gpu: bool = False,
+    ):
+
+        if use_gpu:
+            strain = cupy.array(gwpy_timeseries.value, dtype=float32)
+            time_axis = cupy.array(gwpy_timeseries.times.value, dtype=float64)
+        else:
+            strain = numpy.array(gwpy_timeseries.value, dtype=float32)
+            time_axis = numpy.array(gwpy_timeseries.times.value, dtype=float64)
 
         if detector_name is None:
             detector_name = cls._DECODE_DETECTOR[detector_id]
-
-        if reference_gps_time is None:
-            reference_gps_time = t0_gps + duration / 2
+        if reference_time_gps is None:
+            reference_time_gps = (time_axis[0] + time_axis[-1]) / 2
             warnings.warn(
-                f"Reference time set to half interval: {reference_gps_time} s. Ensure this is fine."
+                f"Reference time set to half interval: { reference_time_gps} s. Ensure this is fine."
             )
 
-        return (
-            gps_times,
-            dt,
-            sampling_rate,
-            t0_gps,
-            duration,
-            detector_name,
-            reference_gps_time,
-        )
-
-    @classmethod
-    @type_check(classmethod=True)
-    def _compute_time_axis(
-        cls, gps_times: numpy.ndarray[float32] | numpy.ndarray[float64]
-    ):
-        ap_time_obj = astropy.time.Time(gps_times, format="gps")
-        ap_time_obj.format = "iso"
-        datetime = ap_time_obj.to_datetime()
-        multi_time_axis = pandas.MultiIndex.from_arrays(
-            [gps_times, datetime], names=("gps", "iso")
-        )
-        return multi_time_axis
-
-    @classmethod
-    @type_check(classmethod=True)
-    def build(
-        cls,
-        strain: numpy.ndarray[float32] | numpy.ndarray[float64],
-        name: str,
-        detector_id: str,
-        reference_gps_time: float32 | float64 | None = None,
-        detector_name: str | None = None,
-        gps_times: numpy.ndarray[float32] | numpy.ndarray[float64] | None = None,
-        dt: float | float32 | float64 | None = None,
-        sampling_rate: int | int32 | int64 | None = None,
-        t0_gps: float64 | None = None,
-        duration: float | float32 | float64 | None = None,
-        use_gpu: bool = True,
-    ):
-        input_params = (
-            gps_times,
-            dt,
-            sampling_rate,
-            t0_gps,
-            duration,
-            detector_id,
-            detector_name,
-            reference_gps_time,
-        )
-
-        # cheking input parameters and filling missing ones
-        cls._input_check(*input_params)
-        (
-            gps_times,
-            dt,
-            sampling_rate,
-            t0_gps,
-            duration,
-            detector_name,
-            reference_gps_time,
-        ) = cls._fill_missing_params(*input_params)
-
-        # building time multi-axis
-        time_multi_axis = cls._compute_time_axis(gps_times)
-
-        # creating the custom xarray
-        array_gps_timeseries = xarray.DataArray(
+        return cls.from_array(
             strain,
-            name="strain",
-            coords=dict(time=time_multi_axis),
-            attrs=dict(
-                segment_name=name,
-                detector_id=detector_id,
-                detector_name=detector_name,
-                t0_gps=t0_gps,
-                reference_gps_time=reference_gps_time,
-                duration=duration,
-                dt=dt,
-                sampling_rate=sampling_rate,
-                white=False,
-            ),
+            segment_name,
+            detector_id,
+            time_axis,
+            reference_time_gps,
+            detector_name,
+            duration=duration,
         )
 
-        if use_gpu:
-            array_gps_timeseries.timeseries.copy_on_gpu()
-
-        return array_gps_timeseries
-
-
-@xarray.register_dataarray_accessor("timeseries")
-class TimeSeriesAccessor:
-    def __init__(self, xarray_obj):
-        self._obj = xarray_obj
-        self._strain_gpu = None
-        self._time_gpu = None
-
-    @type_check(classmethod=True)
-    def _update_gpu_arr(
-        self, strain: numpy.ndarray[float32], time: numpy.ndarray[float32]
+    @classmethod
+    # @type_check(classmethod=True)
+    def _fetch_remote(
+        cls,
+        event_name: str,
+        detector_id: str,
+        duration: _FLOAT_LIKE,
+        sampling_rate: _INT_LIKE,
+        repeat_on_falure: bool,
+        max_attempts: _INT_LIKE,
+        attempts_delay_s: _FLOAT_LIKE,
+        current_attempt: _INT_LIKE,
+        verbose: bool = False,
+        use_gpu: bool = False,
     ):
-        self._strain_gpu = cupy.array(strain, dtype=float32)
-        self._time_gpu = cupy.array(time, dtype=float32)
-        warnings.warn(f"Values on GPU updated")
+        try:
+            reference_time_gps = gwosc.datasets.event_gps(event_name)
+            start_time = reference_time_gps - duration / 2
+            end_time = (
+                reference_time_gps + duration / 2 + 1 / sampling_rate
+            )  # to inlcude last
+            timeserie = gwpy.timeseries.TimeSeries.fetch_open_data(
+                detector_id,
+                start_time,
+                end_time,
+                sampling_rate,
+                verbose=verbose,
+            )
+            new_duration = timeserie.times.value[-1] - timeserie.times.value[0]
+            if new_duration != duration:
+                duration = new_duration
+                warnings.warn(f"Duration of downloaded data set to: {new_duration}")
+            return cls.from_gwpy(
+                timeserie,
+                event_name,
+                detector_id,
+                reference_time_gps=reference_time_gps,
+                use_gpu=use_gpu,
+                duration=duration,
+            )
+        except ValueError:
+            if current_attempt < max_attempts:
+                warnings.warn(
+                    f"Failed downloading {current_attempt}/{max_attempts} times, retrying...",
+                )
+                cls._fetch_remote(
+                    event_name=event_name,
+                    detector_id=detector_id,
+                    duration=duration,
+                    sampling_rate=sampling_rate,
+                    max_attempts=max_attempts,
+                    repeat_on_falure=repeat_on_falure,
+                    attempts_delay_s=attempts_delay_s,
+                    current_attempt=current_attempt + 1,
+                    verbose=verbose,
+                    use_gpu=use_gpu,
+                )
+            else:
+                raise ConnectionError(
+                    f"Failed downloading too many times ({current_attempt})"
+                )
 
-    def copy_on_gpu(self):
-        # TODO: non sono ancora sicuro che questa sia la cosa migliore
-        if self._obj.values.dtype != float32 or self._obj.gps.values.dtype != float32:
-            warnings.warn(f"Data will be cast to float32 before copying to GPU!")
-        self._strain_gpu = cupy.array(self._obj.values, dtype=float32)
-        self._time_gpu = cupy.array(self._obj.gps.values, dtype=float32)
-        warnings.warn(f"Array content copied on GPU!")
+    @classmethod
+    @type_check(classmethod=True)
+    def fetch_open_data(
+        cls,
+        event_names: str | list[str],
+        detector_ids: str | list[str],
+        duration: _FLOAT_LIKE = 100.0,
+        sampling_rate: _INT_LIKE = 4096,
+        repeat_on_falure: bool = True,
+        max_attempts: _INT_LIKE = 100,
+        attempts_delay_s: _FLOAT_LIKE = 0.1,
+        verbose: bool = False,
+        use_gpu: bool = False,
+        force_cache_overwrite: bool = False,
+        cache_results: bool = True,
+    ):
+        if isinstance(event_names, str):
+            event_names = [event_names]
+        if isinstance(detector_ids, str):
+            detector_ids = [detector_ids]
+        if any(
+            detector_id not in cls._DECODE_DETECTOR.keys()
+            for detector_id in detector_ids
+        ):
+            raise NotImplementedError(f"Unsupported detector id!")
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            futures = [
+                executor.submit(
+                    cls._fetch_remote,
+                    event_name,
+                    detector_id,
+                    duration,
+                    sampling_rate,
+                    repeat_on_falure,
+                    max_attempts,
+                    attempts_delay_s,
+                    1,
+                    verbose,
+                    use_gpu,
+                )
+                for event_name in event_names
+                for detector_id in detector_ids
+                if event_name not in cls._CACHED_DATA
+                or detector_id not in cls._CACHED_DATA.setdefault(event_name, {})
+                or duration
+                != cls._CACHED_DATA.setdefault(event_name, {})[detector_id].duration
+                or force_cache_overwrite
+            ]
+
+            for future in futures:
+                timeserie = future.result()
+                cls._CACHED_DATA.setdefault(timeserie.segment_name, {})[
+                    timeserie.detector_id
+                ] = timeserie
+
+        out_var = dict(cls._CACHED_DATA)
+        if not cache_results:
+            cls._CACHED_DATA.clear()
+
+        return out_var
+
+    def __getattribute__(self, attr: str):
+        try:
+            return object.__getattribute__(self, attr)
+        except AttributeError:
+            return getattr(self._strain, attr)
+
+    def __getitem__(self, key):
+        return self._strain.__getitem__(key)
+
+    def time_loc(self, start, end, fmt="gps"):
+        if fmt != "gps":
+            start = astropy.time.Time(start, format=fmt).gps
+            end = astropy.time.Time(end, format=fmt).gps
+        start_idx = int((start - self.t0_gps) // self.dt)
+        end_idx = int((end - self.t0_gps) // self.dt)
+        return self._strain[start_idx:end_idx]
+
+    @abc.abstractproperty
+    def strain(self): ...
+
+    @abc.abstractproperty
+    def time(self): ...
+
+
+class LongSeries(TimeSeries, BaseSeriesAttrs):
+    def __init__(
+        self,
+        strain: dask.array.Array | str,
+        gps_time: dask.array.Array | None,
+        *args,
+        **kwargs,
+    ):
+        self._strain = strain
+        self._gps_time = gps_time
+        self._kwargs = kwargs
+        super().__init__(*args, **kwargs)
 
     @property
-    def strain_gpu(self):
-        return self._strain_gpu
+    def strain(self):
+        return self._strain
 
     @property
-    def time_gpu(self):
-        return self._time_gpu
+    def time(self):
+        if self._gps_time is None:
+            return dask.array.arange(
+                self.t0_gps,
+                self.t0_gps + self.duration,
+                self.dt,
+                dtype=float64,
+            )
+        else:
+            return self._gps_time
+
+
+class ShortSeries(TimeSeries, BaseSeriesAttrs):
+    def __init__(
+        self,
+        strain: numpy.ndarray[numpy.float32] | numpy.ndarray[numpy.float64],
+        gps_time: numpy.ndarray[numpy.float32] | numpy.ndarray[numpy.float64] | None,
+        *args,
+        **kwargs,
+    ):
+        self._strain = strain
+        self._gps_time = gps_time
+        self._kwargs = kwargs
+        super().__init__(*args, **kwargs)
 
     @property
-    def dt(self):
-        t0 = self._obj.gps.values[0]
-        t1 = self._obj.gps.values[1]
-        _dt = t1 - t0
-        # Me being paraniod
-        assert (
-            _dt == self._obj.attrs["dt"]
-        ), "Data dt rate not matching the value in attributes!"
-        return _dt
+    def strain(self):
+        return self._strain
 
     @property
-    def sampling_rate(self):
-        _sampling_rate = int32(1 / self.dt)
-        # Me being paranoid
-        assert (
-            _sampling_rate == self._obj.attrs["sampling_rate"]
-        ), "Data sampling rate not matching the value in attributes!"
-        return _sampling_rate
+    def time(self):
+        if self._gps_time is None:
+            self._gps_time = numpy.arange(
+                self.t0_gps,
+                self.t0_gps + self.duration,
+                self.dt,
+                dtype=float64,
+            )
+        return self._gps_time
 
-    def whiten(self): ...
 
-    def crop(self): ...
+class GPUSeries(TimeSeries, BaseSeriesAttrs):
+    def __init__(
+        self,
+        strain: cupy.typing.NDArray[numpy.float32],
+        gps_time: cupy.typing.NDArray[numpy.float32] | None,
+        *args,
+        **kwargs,
+    ):
+        self._strain = strain
+        self._gps_time = gps_time
+        self._kwargs = kwargs
+        super().__init__(*args, **kwargs)
+
+    @property
+    def strain(self):
+        return self._strain
+
+    @property
+    def time(self):
+        if self._gps_time is None:
+            self._gps_time = cupy.arange(
+                self.t0_gps,
+                self.t0_gps + self.duration,
+                self.dt,
+                dtype=float64,
+            )
+        return self._gps_time

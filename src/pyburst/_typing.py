@@ -20,10 +20,14 @@ from functools import wraps
 import typing
 import types
 
+import cupy
+import numpy
+import dask.array
+
 T = typing.TypeVar("T")
 
 
-def _check_arg(arg, arg_type_hints):
+def _check_arg(arg, var_name, arg_type_hints):
     """
     Checks if an argument is an instance of one or more specified types.
 
@@ -49,54 +53,67 @@ def _check_arg(arg, arg_type_hints):
         # Check if 'matrix' is a list of lists of integers
         _check_arg(matrix, list[list[int]])
     """
-    type_error_msg = f"{arg} is not an instance of {arg_type_hints}"
+    type_str = (
+        f"({type(arg)}[{arg.dtype}])" if hasattr(arg, "dtype") else f"({type[arg]})"
+    )
+    type_error_msg = f"{var_name}: {type_str} is not an instance of {arg_type_hints}"
     arg_type_origin = typing.get_origin(arg_type_hints)
+    _implemented_types = [numpy.ndarray, cupy.ndarray, list, dask.array.Array]
 
     # Check for simple types
     if arg_type_origin is None:
-        error_formats = [dict, list]
-        if arg_type_hints in error_formats:
-            raise NotImplementedError(
-                f"Type checking for {arg_type_hints} not implemented"
-            )
         if not isinstance(arg, arg_type_hints):
             raise TypeError(type_error_msg)
 
     # Check for composed types
     else:
         arg_types = typing.get_args(arg_type_hints)
-        if arg_type_origin not in (typing.Union, types.UnionType):
-            non_monadic = (
-                any(typing.get_origin(_) for _ in arg_types) or len(arg_types) > 1
-            )
-            if non_monadic:
-                raise NotImplementedError(
-                    f"Type checking for {arg_type_hints} not implemented: Non monadic!"
-                )
-            # Checking if parent object is right
-            if not isinstance(arg, arg_type_origin):
-                raise TypeError(type_error_msg)
-            if hasattr(arg, "dtype"):
-                if arg.dtype not in arg_types:
-                    raise TypeError(type_error_msg)
-            elif isinstance(arg, list):
-                if not all(isinstance(elem, arg_types) for elem in arg):
-                    raise TypeError(type_error_msg)
-            else:
-                raise NotImplementedError(
-                    f"Type checking for {arg_types} not implemented"
-                )
-        else:
-            for arg_type in arg_types:
+
+        if arg_type_origin in (
+            typing.Union,
+            types.UnionType,
+            typing.Generic,
+        ):
+            for type_hint in arg_types:
                 try:
-                    _check_arg(arg, arg_type)
+                    _check_arg(arg, var_name, type_hint)
                     break
                 except TypeError:
                     continue
-                except NotImplementedError as err:
-                    raise err
             else:
                 raise TypeError(type_error_msg)
+
+        elif arg_type_origin in _implemented_types:
+            if len(arg_types) > 1 and arg_type_origin != cupy.ndarray:
+                raise NotImplementedError(
+                    f"Cannot check {arg_type_origin}, non unadic list not supported!"
+                )
+            elif len(arg_types) > 2 and arg_type_origin == cupy.ndarray:
+                raise NotImplementedError(
+                    f"Cannot check {arg_type_origin}, non unadic list not supported!"
+                )
+            if type(arg) != arg_type_origin:
+                raise TypeError(type_error_msg)
+
+            if arg_type_origin == list:
+                if not all(type(elem) in arg_types for elem in arg):
+                    raise TypeError(type_error_msg)
+
+            elif arg_type_origin == numpy.ndarray:
+                if arg.dtype not in arg_types:
+                    raise TypeError(type_error_msg)
+
+            elif arg_type_origin == cupy.ndarray:
+                if arg.dtype not in arg_types[1].__args__:
+                    raise TypeError(type_error_msg)
+            else:
+                raise NotImplementedError(
+                    f"Type checking for {arg_type_hints} not implemented"
+                )
+        else:
+            raise NotImplementedError(
+                f"Type checking for {arg_type_hints} not implemented"
+            )
 
 
 def type_check(classmethod: bool = False) -> typing.Callable[..., T]:
@@ -178,11 +195,11 @@ def type_check(classmethod: bool = False) -> typing.Callable[..., T]:
                     pass
                 else:
                     arg_type = var_name_and_type[var_names[i]]
-                    _check_arg(arg, arg_type)
+                    _check_arg(arg, var_names[i], arg_type)
 
             for kwarg_name, kwarg in kwargs.items():
                 kwarg_type = var_name_and_type[kwarg_name]
-                _check_arg(kwarg, kwarg_type)
+                _check_arg(kwarg, var_names[i], kwarg_type)
 
             return func(*args, **kwargs)
 
