@@ -29,32 +29,22 @@ def event_exists_for_run(detector, run):
     )
 
 
-USE_LOCAL_DATA = False
-LOCAL_DATA_PATH = "/leonardo_work/uTS23_Trovato_0/felicetti_tmp/qp_transform_data"
-
 DETECTOR_OPTIONS = [
     ("L1", "Ligo Livingston (L1)"),
     ("H1", "Ligo Hanford (H1)"),
     ("V1", "Virgo (V1)"),
 ]
 
-if USE_LOCAL_DATA:
-    DEFAULT_RUN_LIST = []
-else:
-    DEFAULT_RUN_LIST = [
-        (run, run)
-        for run in gwosc.datasets.find_datasets(
-            detector=DETECTOR_OPTIONS[0][0], type="run"
-        )
-        if event_exists_for_run(DETECTOR_OPTIONS[0][0], run)
-    ]
+DEFAULT_RUN_LIST = [
+    (run, run)
+    for run in gwosc.datasets.find_datasets(detector=DETECTOR_OPTIONS[0][0], type="run")
+    if event_exists_for_run(DETECTOR_OPTIONS[0][0], run)
+]
 
 CACHED_TIME_SERIES = {}
 
 
-def download_signal_and_preprocess(
-    detector_id, event_name, runs, tau_min, tau_max, source="remote", local_path=""
-):
+def download_signal_and_preprocess(detector_id, event_name, runs, tau_min, tau_max):
     max_runs = 100
 
     try:
@@ -62,7 +52,7 @@ def download_signal_and_preprocess(
         signal = preprocessing.gw_signal.get_data_from_gwosc(
             [event_name],
             [detector_id],
-            segment_duration=segment_duration,
+            segment_duration=20,
             source=source,
             local_path=local_path,
         )
@@ -106,13 +96,7 @@ def download_signal_and_preprocess(
         if runs < max_runs:
             print(f"Failed loading data {runs} / {max_runs} times.")
             return download_signal_and_preprocess(
-                detector_id,
-                event_name,
-                runs + 1,
-                tau_min,
-                tau_max,
-                source=source,
-                local_path=local_path,
+                detector_id, event_name, runs + 1, tau_min, tau_max
             )
         else:
             print(f"Failed loading data too many times")
@@ -120,9 +104,7 @@ def download_signal_and_preprocess(
             return {"success": False}
 
 
-def check_and_download_timeseries(
-    detector_id, event_name, tau_min, tau_max, source="remote", local_path=""
-):
+def check_and_download_timeseries(detector_id, event_name, tau_min, tau_max):
     # Verifica se i dati sono già presenti nella cache
     if (
         detector_id in CACHED_TIME_SERIES
@@ -135,13 +117,7 @@ def check_and_download_timeseries(
     else:
         # I dati non sono presenti nella cache, effettua il download e aggiornamento della cache
         result = download_signal_and_preprocess(
-            detector_id,
-            event_name,
-            1,
-            tau_min,
-            tau_max,
-            source=source,
-            local_path=local_path,
+            detector_id, event_name, 1, tau_min, tau_max
         )
 
         if result["success"]:

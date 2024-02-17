@@ -55,7 +55,6 @@ def get_data_from_gwosc(
             print(f"Checking if data exists...")
 
         if source == "remote":
-            print(event_name)
             assert (
                 event_name in gwosc.datasets.find_datasets()
             ), f"The event {event_name} is not in the gwosc dataset."
