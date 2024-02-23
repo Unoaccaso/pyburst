@@ -26,6 +26,28 @@ import dask.array
 
 T = typing.TypeVar("T")
 
+from numpy import float32, float64, int32, int64, complex64, complex128
+
+_ARRAY_LIKE = typing.Union[
+    numpy.ndarray[float32],
+    numpy.ndarray[float64],
+    dask.array.Array,
+    cupy.typing.NDArray[float32],
+    cupy.typing.NDArray[float64],
+]
+_FLOAT_LIKE = typing.Union[
+    float,
+    float32,
+    float64,
+]
+_INT_LIKE = typing.Union[
+    int,
+    int32,
+    int64,
+]
+
+_FLOAT_EPS = 1e-8
+
 
 def _check_arg(arg, var_name, arg_type_hints):
     """
@@ -54,9 +76,9 @@ def _check_arg(arg, var_name, arg_type_hints):
         _check_arg(matrix, list[list[int]])
     """
     type_str = (
-        f"({type(arg)}[{arg.dtype}])" if hasattr(arg, "dtype") else f"({type[arg]})"
+        f"({type(arg)}[{arg.dtype}])" if hasattr(arg, "dtype") else f"({type(arg)})"
     )
-    type_error_msg = f"{var_name}: {type_str} is not an instance of {arg_type_hints}"
+    type_error_msg = f"'{var_name}' : {type_str} is not an instance of {arg_type_hints}"
     arg_type_origin = typing.get_origin(arg_type_hints)
     _implemented_types = [numpy.ndarray, cupy.ndarray, list, dask.array.Array]
 
@@ -198,8 +220,7 @@ def type_check(classmethod: bool = False) -> typing.Callable[..., T]:
                     _check_arg(arg, var_names[i], arg_type)
 
             for kwarg_name, kwarg in kwargs.items():
-                kwarg_type = var_name_and_type[kwarg_name]
-                _check_arg(kwarg, var_names[i], kwarg_type)
+                _check_arg(kwarg, kwarg_name, var_name_and_type[kwarg_name])
 
             return func(*args, **kwargs)
 

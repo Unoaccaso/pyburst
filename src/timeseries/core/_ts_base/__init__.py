@@ -1,8 +1,8 @@
 """
-Copyright (C) 2024 Riccardo Felicetti <https://github.com/Unoaccaso>
+Copyright (C) 2024 unoaccaso <https://github.com/Unoaccaso>
 
-Created Date: Friday, February 9th 2024, 2:29:32 pm
-Author: Riccardo Felicetti
+Created Date: Thursday, February 22nd 2024, 11:54:01 am
+Author: unoaccaso
 
 This program is free software: you can redistribute it and/or modify it under
 the terms of the GNU Affero General Public License as published by the
@@ -14,4 +14,4 @@ You should have received a copy of the GNU Affero General Public License
 along with this program. If not, see <https: //www.gnu.org/licenses/>.
 """
 
-from .timeseries import TimeSeries
+from ._ts_base import _TimeSeriesBase, _BaseSeriesAttrs
