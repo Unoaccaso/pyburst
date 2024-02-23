@@ -18,6 +18,7 @@ along with this program. If not, see <https: //www.gnu.org/licenses/>.
 import typing
 
 # * my modules
+from . import _cputs_analysis, _cputs_signal_processing
 from .. import _ts_base
 from ...common._typing import type_check
 
@@ -43,6 +44,9 @@ class _CPUSeries(_ts_base._TimeSeriesBase):
         self._gps_times = gps_times
         super().__init__(*args, **kwargs)
 
+        self._fft_values = None
+        self._fft_frequencies = None
+
     @property
     def values(self):
         """Values property."""
@@ -53,42 +57,61 @@ class _CPUSeries(_ts_base._TimeSeriesBase):
         """GPS times property."""
         if self._gps_times is None:
             self._gps_times = (
-                numpy.arange(0, self.duration, self.dt, dtype=numpy.float64)
-                + self.t0_gps
-            )
+                numpy.arange(0, self.duration, self.dt) + self.t0_gps
+            ).astype(numpy.float64)
         return self._gps_times
 
-    def _copy(self, *args, **kwargs):
-        old_kwargs = self.__dict__.copy()
-        new_kwargs = {}
-        for attr_name, value in old_kwargs.items():
-            attr_name = attr_name[1:]  # removing the underscore
-            new_kwargs[attr_name] = value
-        new_kwargs.update(kwargs)
-        return _CPUSeries(*args, **new_kwargs)
+    @property
+    def fft_values(self):
+        if self._fft_values is None:
+            self._fft_values = _cputs_analysis._compute_fft(self)
+        return self._fft_values
+
+    @property
+    def fft_frequencies(self):
+        if self._fft_frequencies is None:
+            self._fft_frequencies = _cputs_analysis._compute_fft_freqs(self)
+        return self._fft_frequencies
 
     def crop(self, start, stop, time_fmt: str = "gps"):
-        if time_fmt != "gps":
-            start = astropy.time.Time(start, format=time_fmt).gps
-            end = astropy.time.Time(end, format=time_fmt).gps
-        start_idx = int((start - self.t0_gps) // self.dt)
-        end_idx = int((stop - self.t0_gps) // self.dt)
-        assert end_idx < len(self.values), f"stop time is too big!"
-        assert start_idx > 0, f"start time is too small!"
-        t0_gps = numpy.float64(start)
-        duration = numpy.float64(stop - start)
-        sampling_rate = self.sampling_rate
-        gps_times = (
-            numpy.arange(duration + 1 / sampling_rate, step=1 / sampling_rate) + t0_gps
-        )
+        """
+        Crop the time series to the specified start and stop times.
 
-        return self._copy(
-            values=self.values[start_idx : end_idx + 1],  # include last element
-            t0_gps=t0_gps,
-            duration=duration,
-            sampling_rate=sampling_rate,
-            gps_times=gps_times,
+        Parameters
+        ----------
+        start : numpy.float64
+            Start time of the cropped segment.
+        stop : numpy.float64
+            Stop time of the cropped segment.
+        time_fmt : str, optional
+            Format of the start and stop times. Default is "gps".
+
+        Returns
+        -------
+        _CPUSeries
+            A cropped instance of the time series.
+
+        Raises
+        ------
+        AssertionError
+            If the stop time is beyond the end of the time series.
+            If the start time is before the beginning of the time series.
+
+        Notes
+        -----
+        This method crops the time series to the specified start and stop times.
+        The start and stop times are specified in GPS time format unless otherwise specified.
+        The returned instance is a cropped version of the original time series.
+        If other supported formats are specified, the crop will always be done using gps time, to ensure consistency
+
+        """
+        kwargs = _cputs_signal_processing._crop(
+            self,
+            start,
+            stop,
+            time_fmt,
         )
+        return _CPUSeries(**kwargs)
 
     # ! TODO
     @property
