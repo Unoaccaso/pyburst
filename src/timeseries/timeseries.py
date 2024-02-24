@@ -39,9 +39,25 @@ class TimeSeries:
         cls._DATA_CACHE = LRUDownloadCache(value)
 
     @classmethod
-    @type_check(classmethod=True)
-    def read_cached_data(cls, segment_name: str, detector_id: str):
-        return cls._DATA_CACHE[segment_name, detector_id]
+    def read_cached_data(
+        cls,
+        segment_names: str | list["str"] = "all",
+        detector_ids: str | list[str] = "all",
+    ):
+        print(cls._DATA_CACHE.read_cached_data(segment_names, detector_ids))
+
+    @classmethod
+    def get_cached_data(
+        cls,
+        segment_names: str | list["str"] = "all",
+        detector_ids: str | list[str] = "all",
+    ):
+        return cls._DATA_CACHE.get_cached_data(segment_names, detector_ids)
+
+    # @classmethod
+    # @type_check(classmethod=True)
+    # def get_cached_data(cls, segment_name: str = "all", detector_id: str = "all"):
+    #     return cls._DATA_CACHE[(segment_name, detector_id)].__repr__()
 
     @classmethod
     @type_check(classmethod=True)

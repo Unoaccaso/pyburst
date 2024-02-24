@@ -15,13 +15,10 @@ along with this program. If not, see <https: //www.gnu.org/licenses/>.
 """
 
 from collections import OrderedDict
-import numpy
-import cupy
-import pandas
 
-import sys
 
 from ._sys import _format_size, _obj_size
+from ._typing import type_check
 
 from tabulate import tabulate
 
@@ -106,6 +103,50 @@ class LRUDownloadCache(OrderedDict):
 
     def __repr__(self):
         return _download_cache_repr(self)
+
+    @type_check(classmethod=True)
+    def read_cached_data(
+        self,
+        segment_names: str | list["str"] = "all",
+        detector_ids: str | list[str] = "all",
+    ):
+        if segment_names == "all":
+            segment_names = [key[0] for key in list(self.keys())]
+        elif isinstance(segment_names, str):
+            segment_names = [segment_names]
+        if detector_ids == "all":
+            detector_ids = [key[1] for key in list(self.keys())]
+        elif isinstance(detector_ids, str):
+            detector_ids = [detector_ids]
+        out_dict = LRUDownloadCache()
+        for segment_name in segment_names:
+            for detector_id in detector_ids:
+                key = (segment_name, detector_id)
+                if key in self and key not in out_dict:
+                    out_dict[key] = self[key]
+        return out_dict.__repr__()
+
+    @type_check(classmethod=True)
+    def get_cached_data(
+        self,
+        segment_names: str | list["str"] = "all",
+        detector_ids: str | list[str] = "all",
+    ):
+        if segment_names == "all":
+            segment_names = [key[0] for key in list(self.keys())]
+        elif isinstance(segment_names, str):
+            segment_names = [segment_names]
+        if detector_ids == "all":
+            detector_ids = [key[1] for key in list(self.keys())]
+        elif isinstance(detector_ids, str):
+            detector_ids = [detector_ids]
+        out_dict = dict()
+        for segment_name in segment_names:
+            for detector_id in detector_ids:
+                key = (segment_name, detector_id)
+                if key in self and key not in out_dict:
+                    out_dict[key] = self[key]
+        return out_dict
 
 
 def _download_cache_repr(download_cache: LRUDownloadCache):
