@@ -18,6 +18,8 @@ import sys, os
 
 import tabulate
 
+from ...common._sys import _format_size
+
 
 def _repr_timeserie(ts_class) -> str:
     """
@@ -45,10 +47,15 @@ def _repr_timeserie(ts_class) -> str:
                 if len(value.shape) > 0:
                     # Extract data type string and append to array_tab
                     dtype_str = str(type(value)).split("'")[1]
+                    value_str = value.__repr__()
+                    start_idx = value_str.index("[")
+                    end_idx = value_str.rindex("]") + 1
                     array_tab.append(
                         [
                             f"{parsed_name}\n[{dtype_str}<{value.dtype}>]",  # Concatenate attribute name and type
-                            value.__repr__(),  # Get string representation of the value
+                            value_str[
+                                start_idx:end_idx
+                            ],  # Get string representation of the value
                             value.shape,  # Get the shape of the array
                             _format_size(value.nbytes),  # Format the size of the array
                         ]
@@ -99,27 +106,3 @@ def _repr_timeserie(ts_class) -> str:
     out_str = f"Time serie content:\n\n{array_str}\n\nTime serie attributes:\n\n{attribute_str}"
 
     return out_str  # Return the final output string
-
-
-def _format_size(size) -> str:
-    """
-    Format the size for readability.
-
-    Parameters
-    ----------
-    size : int
-        Size to format.
-
-    Returns
-    -------
-    str
-        Formatted size string.
-    """
-    if size < 1024:
-        return f"{size} B"
-    elif size < 1024**2:
-        return f"{size / 1024:.2f} kB"
-    elif size < 1024**3:
-        return f"{size / (1024 ** 2):.2f} MB"
-    else:
-        return f"{size / (1024 ** 3):.2f} GB"

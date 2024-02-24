@@ -15,22 +15,34 @@ along with this program. If not, see <https: //www.gnu.org/licenses/>.
 """
 
 import warnings
+import concurrent
 
 from .common._typing import type_check, _ARRAY_LIKE, _FLOAT_LIKE, _INT_LIKE, _FLOAT_EPS
 from .core._cpu_series import _CPUSeries
+from .core._caching import LRUDownloadCache
 
-import numpy
+import numpy, cupy
+import gwpy.timeseries, gwosc
 
 
 class TimeSeries:
+    _cache_size_mb = 1_000
+    _DOWNLOAD_CACHE = LRUDownloadCache(max_size_mb=_cache_size_mb)
+
+    @classmethod
+    @type_check(classmethod=True)
+    def set_cache_size_mb(cls, value: _FLOAT_LIKE | _INT_LIKE):
+        cls._cache_size_mb = value
+        warnings.warn("cache is being deleted!")
+        cls._DOWNLOAD_CACHE = LRUDownloadCache(value)
 
     @classmethod
     @type_check(classmethod=True)
     def from_array(
         cls,
         values: _ARRAY_LIKE,
-        segment_name: str,
-        detector_id: str,
+        segment_name: str = "-",
+        detector_id: str = "-",
         gps_times: _ARRAY_LIKE | None = None,
         reference_time_gps: _FLOAT_LIKE = None,
         detector_name: str = None,
@@ -44,18 +56,18 @@ class TimeSeries:
 
         Parameters
         ----------
-        strain : numpy.ndarray[float32 | float64], dask.array.Array, cupy.ndarray[float32]
-            The strain data. The returned TimeSeries object depends on the type of input strain:
-            - If strain is a NumPy array, a ShortSeries object is returned.
-            - If strain is a Dask array or a string, a LongSeries object is returned.
-            - If strain is a CuPy array, a GPUSeries object is returned.
+        values : numpy.ndarray[float32 | float64], dask.array.Array, cupy.ndarray[float32]
+            The values data. The returned TimeSeries object depends on the type of input values:
+            - If values is a NumPy array, a ShortSeries object is returned.
+            - If values is a Dask array or a string, a LongSeries object is returned.
+            - If values is a CuPy array, a GPUSeries object is returned.
             The GPUSeries object utilizes GPU computing for array operations.
             The LongSeries object supports lazy computing with Dask arrays.
 
         gps_time : numpy.ndarray[float32 | float64], dask.array.Array, cupy.ndarray[float32], optional
-            GPS time array (if available). It must have the same dtype of `strain`.
+            GPS time array (if available). It must have the same dtype of `values`.
             If not provided, it will be calculated when accessed for the first time.
-            Strain and GPS time can be sliced using time indices without immediate calculation of the array axes.
+            values and GPS time can be sliced using time indices without immediate calculation of the array axes.
 
         segment_name : str
             Name of the segment.
@@ -84,13 +96,13 @@ class TimeSeries:
         ValueError
             If the input parameters are invalid.
         NotImplementedError
-            If the strain type is not supported.
+            If the values type is not supported.
 
         Examples
         --------
-        >>> strain = numpy.random.randn(1000).astype(numpy.float32)
+        >>> values = numpy.random.randn(1000).astype(numpy.float32)
         >>> t_series = TimeSeries.from_array(
-        ...     strain=strain,
+        ...     values=values,
         ...     segment_name="Test Segment",
         ...     detector_id="H1",
         ...     dt=0.001,
@@ -185,7 +197,181 @@ class TimeSeries:
 
         if isinstance(values, numpy.ndarray):
             return _CPUSeries(**kwargs)
+        if isinstance(values, cupy.ndarray):
+            return
         else:
             raise NotImplementedError(
                 f"{type(values)} type for values is not supported."
             )
+
+    # TODO: DOCSTRINGS!!!
+    @classmethod
+    @type_check(classmethod=True)
+    def from_gwpy(
+        cls,
+        gwpy_timeseries: gwpy.timeseries.TimeSeries,
+        segment_name: str,
+        detector_id: str,
+        duration: _FLOAT_LIKE | None = None,
+        reference_time_gps: _FLOAT_LIKE | None = None,
+        use_gpu: bool = False,
+    ):
+
+        if use_gpu:
+            values = cupy.array(gwpy_timeseries.value, dtype=numpy.float32)
+            time_axis = cupy.array(gwpy_timeseries.times.value, dtype=numpy.float64)
+        else:
+            values = numpy.array(gwpy_timeseries.value, dtype=numpy.float64)
+            time_axis = numpy.array(gwpy_timeseries.times.value, dtype=numpy.float64)
+
+        return cls.from_array(
+            values,
+            segment_name,
+            detector_id,
+            time_axis,
+            numpy.float64(reference_time_gps),
+            duration=numpy.float64(duration),
+        )
+
+    @classmethod
+    @type_check(classmethod=True)
+    def _fetch_remote(
+        cls,
+        event_name: str,
+        detector_id: str,
+        duration: _FLOAT_LIKE,
+        sampling_rate: _INT_LIKE,
+        repeat_on_falure: bool,
+        max_attempts: _INT_LIKE,
+        current_attempt: _INT_LIKE,
+        verbose: bool = False,
+        use_gpu: bool = False,
+    ):
+        try:
+            if verbose:
+                print(f"Connecting to gwosc for {event_name}({detector_id})...")
+            reference_time_gps = gwosc.datasets.event_gps(event_name)
+            if verbose:
+                print("done!")
+            start_time = reference_time_gps - duration / 2
+            end_time = (
+                reference_time_gps + duration / 2 + 1 / sampling_rate
+            )  # to inlcude last
+            timeserie = gwpy.timeseries.TimeSeries.fetch_open_data(
+                detector_id,
+                start_time,
+                end_time,
+                sampling_rate,
+                verbose=verbose,
+            )
+            new_duration = timeserie.times.value[-1] - timeserie.times.value[0]
+            if new_duration != duration:
+                duration = new_duration
+                warnings.warn(f"Duration of downloaded data set to: {new_duration}")
+            return cls.from_gwpy(
+                timeserie,
+                event_name,
+                detector_id,
+                reference_time_gps=reference_time_gps,
+                use_gpu=use_gpu,
+                duration=duration,
+            )
+        except ValueError:
+            if current_attempt < max_attempts:
+                warnings.warn(
+                    f"Failed downloading {current_attempt}/{max_attempts} times, retrying...",
+                )
+                cls._fetch_remote(
+                    event_name=event_name,
+                    detector_id=detector_id,
+                    duration=duration,
+                    sampling_rate=sampling_rate,
+                    max_attempts=max_attempts,
+                    repeat_on_falure=repeat_on_falure,
+                    current_attempt=current_attempt + 1,
+                    verbose=verbose,
+                    use_gpu=use_gpu,
+                )
+            else:
+                raise ConnectionError(
+                    f"Failed downloading too many times ({current_attempt})"
+                )
+
+    # TODO
+    @classmethod
+    @type_check(classmethod=True)
+    def fetch_event(
+        cls,
+        event_names: str | list[str],
+        detector_ids: str | list[str],
+        duration: _FLOAT_LIKE = 100.0,
+        sampling_rate: _INT_LIKE = 4096,
+        repeat_on_falure: bool = True,
+        max_attempts: _INT_LIKE = 100,
+        verbose: bool = False,
+        use_gpu: bool = False,
+        force_cache_overwrite: bool = False,
+        cache_results: bool = True,
+    ):
+        if isinstance(event_names, str):
+            event_names = [event_names]
+        if isinstance(detector_ids, str):
+            detector_ids = [detector_ids]
+        # if any(
+        #     detector_id not in cls._DECODE_DETECTOR.keys()
+        #     for detector_id in detector_ids
+        # ):
+        #     raise NotImplementedError(f"Unsupported detector id!")
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            futures = [
+                executor.submit(
+                    cls._fetch_remote,
+                    event_name,
+                    detector_id,
+                    duration,
+                    sampling_rate,
+                    repeat_on_falure,
+                    max_attempts,
+                    1,
+                    verbose,
+                    use_gpu,
+                )
+                for event_name in event_names
+                for detector_id in detector_ids
+                if (event_name, detector_id) not in cls._DOWNLOAD_CACHE
+                or duration != cls._DOWNLOAD_CACHE[(event_name, detector_id)].duration
+                or force_cache_overwrite
+                or (
+                    use_gpu
+                    and not isinstance(
+                        cls._DOWNLOAD_CACHE[(event_name, detector_id)],
+                        cupy.ndarray,
+                    )
+                )
+            ]
+            out_var = {}
+            for future in futures:
+                timeserie = future.result()
+                event_name = timeserie.segment_name
+                detector_id = timeserie.detector_id
+                out_var[(event_name, detector_id)] = timeserie
+
+        if cache_results:
+            cls._DOWNLOAD_CACHE.update(out_var)
+
+        return out_var
+
+    # TODO
+    @classmethod
+    @type_check(classmethod=True)
+    def fetch_open_data(cls): ...
+
+    # TODO
+    @classmethod
+    @type_check(classmethod=True)
+    def from_zarr(cls): ...
+
+    # TODO
+    @classmethod
+    @type_check(classmethod=True)
+    def save(cls): ...

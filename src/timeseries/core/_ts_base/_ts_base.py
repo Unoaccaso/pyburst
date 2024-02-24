@@ -17,6 +17,7 @@ along with this program. If not, see <https: //www.gnu.org/licenses/>.
 from dataclasses import dataclass, asdict
 import abc
 import warnings
+import sys
 
 import numpy
 
@@ -28,6 +29,7 @@ _DECODE_DETECTOR = {
     "L1": "Ligo Livingston (L1)",
     "H1": "Ligo Hanford (H1)",
     "V1": "Virgo (V1)",
+    "-": "-",
 }
 
 
@@ -261,6 +263,7 @@ class _TimeSeriesBase(abc.ABC, _BaseSeriesAttrs):
         ...
 
     # * Parameters
+
     @abc.abstractproperty
     def values(self): ...
 
@@ -275,6 +278,14 @@ class _TimeSeriesBase(abc.ABC, _BaseSeriesAttrs):
 
     @abc.abstractproperty
     def fft_frequencies(self): ...
+
+    @abc.abstractproperty
+    def nbytes(self):
+        self_content = self.__dict__
+        size = 0
+        for _, item in self_content.items():
+            size += item.nbytes if hasattr(item, "nbytes") else sys.getsizeof(item)
+        return size
 
     @abc.abstractmethod
     def __repr__(self) -> str:

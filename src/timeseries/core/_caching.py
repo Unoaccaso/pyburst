@@ -21,74 +21,14 @@ import pandas
 
 import sys
 
+from ..common._sys import _format_size, _obj_size
+
 from tabulate import tabulate
 
 from warnings import warn
 
 
-def nested_dict_to_table(nested_dict):
-    rows = []
-    for key, value in nested_dict.items():
-        for detector, data in value.items():
-            row = [key, detector]
-            for k, v in data.items():
-                if isinstance(v, list):
-                    v = f"<TimeSeries(...)>"
-                row.append(v)
-            rows.append(row)
-    headers = ["key 1", "key 2"]
-    headers += list(data.keys())
-    return tabulate(rows, headers=headers, tablefmt="fancy_grid")
-
-
-def _obj_size(obj):
-    """
-    Calculate the total size in bytes of a nested object, considering numpy.ndarray, cupy.ndarray, and pandas.Series objects as well.
-
-    Parameters
-    ----------
-    obj : dict or list or tuple or numpy.ndarray or cupy.ndarray or pandas.Series
-        The nested object to calculate the size of.
-
-    Returns
-    -------
-    int
-        The total size of the nested object in bytes.
-
-    Examples
-    --------
-    >>> nested_dict = {
-    ...     'a': 1,
-    ...     'b': {'c': 2, 'd': 3},
-    ...     'e': {'f': {'g': 4, 'h': 5}},
-    ...     'numpy_array': numpy.zeros((10, 10)),
-    ...     'cupy_array': cupy.zeros((10, 10)),
-    ...     'pandas_series': pandas.Series(range(10))
-    ... }
-    >>> size_in_bytes = _obj_size(nested_dict)
-    >>> print("Total size of the nested object:", size_in_bytes, "bytes")
-    Total size of the nested object: XXX bytes
-    """
-    total_size = 0
-
-    if isinstance(obj, dict):
-        for key, value in obj.items():
-            if isinstance(value, dict):
-                total_size += _obj_size(value)
-            else:
-                total_size += sys.getsizeof(value)
-    elif isinstance(obj, (list, tuple)):
-        for item in obj:
-            total_size += _obj_size(item)
-    elif isinstance(obj, (numpy.ndarray, cupy.ndarray, pandas.Series)):
-        total_size += obj.nbytes
-    else:
-        total_size += sys.getsizeof(obj)
-
-    return total_size
-
-
-class LRUCache(OrderedDict):
+class LRUDownloadCache(OrderedDict):
     """
     A Least Recently Used (LRU) cache implemented using an OrderedDict.
 
@@ -126,7 +66,7 @@ class LRUCache(OrderedDict):
 
     def __init__(self, max_size_mb: float = 100):
         super().__init__()
-        self.max_size_bytes = max_size_mb * (1024 * 1024)  # Convert MB to bytes
+        self._max_size_bytes = max_size_mb * (1024 * 1024)  # Convert MB to bytes
 
     def __getitem__(self, key):
         if key in self:
@@ -139,23 +79,20 @@ class LRUCache(OrderedDict):
     def __setitem__(self, key, value):
         if key not in self:
             item_size_bytes = _obj_size(value)
-            while self._get_size() + item_size_bytes > self.max_size_bytes:
+            while self.nbytes + item_size_bytes > self.max_size_bytes:
                 self._evict_least_recently_used()
         super().__setitem__(key, value)
 
-    def _get_size(self):
-        return _obj_size(self)
+    @property
+    def nbytes(self):
+        size = 0
+        for _, serie in self.items():
+            size += serie.nbytes
+        return size
 
     def _evict_least_recently_used(self):
         key, _ = self.popitem(last=False)  # Remove the least recent item
         warn(f"Removed {key} to free cache space.")
-
-    @property
-    def nbytes(self):
-        """
-        int: The current size of the cache in bytes.
-        """
-        return self._get_size()
 
     @property
     def cache_size_mb(self):
@@ -165,6 +102,10 @@ class LRUCache(OrderedDict):
         return self.max_size_bytes / (1024 * 1024)
 
     @property
+    def max_size_bytes(self):
+        return self._max_size_bytes
+
+    @property
     def cache_contents(self):
         """
         list: The keys present in the cache.
@@ -172,7 +113,40 @@ class LRUCache(OrderedDict):
         return list(self.keys())
 
     def __repr__(self):
-        return nested_dict_to_table(self)
+        return _download_cache_repr(self)
 
-    def __str__(self):
-        return nested_dict_to_table(self)
+
+def _download_cache_repr(download_cache: LRUDownloadCache):
+    rows = [
+        [
+            "event name",
+            "detector id",
+            "data type",
+            "duration [s]",
+            "size",
+            r"% of cache",
+        ]
+    ]
+    for key, serie in download_cache.items():
+        rows.append(
+            [
+                key[0],
+                key[1],
+                f"[{type(serie.values)}<{serie.values.dtype}>]",
+                f"{serie.duration: .1e}",
+                _format_size(serie.nbytes),
+                f"{serie.nbytes / download_cache.max_size_bytes * 100 : .2f} %",
+            ]
+        )
+    rows.append(
+        [
+            "",
+            "",
+            "",
+            "Tot",
+            _format_size(download_cache.nbytes),
+            f"{download_cache.nbytes / download_cache.max_size_bytes * 100 : .2f} %",
+        ]
+    )
+
+    return tabulate(rows, headers="firstrow", tablefmt="fancy_grid")

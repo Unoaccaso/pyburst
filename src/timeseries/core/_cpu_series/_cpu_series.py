@@ -26,6 +26,7 @@ from ...common._typing import type_check
 import numpy, numpy.typing
 
 import astropy
+import sys
 
 
 class _CPUSeries(_ts_base._TimeSeriesBase):
@@ -46,6 +47,10 @@ class _CPUSeries(_ts_base._TimeSeriesBase):
 
         self._fft_values = None
         self._fft_frequencies = None
+
+    @property
+    def nbytes(self):
+        return super().nbytes
 
     @property
     def values(self):
