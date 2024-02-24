@@ -103,6 +103,6 @@ def _repr_timeserie(ts_class) -> str:
     )
 
     # Combine array and attribute strings into final output string
-    out_str = f"Time serie content:\n\n{array_str}\n\nTime serie attributes:\n\n{attribute_str}"
+    out_str = f"\nTime serie content:\n\n{array_str}\n\nTime serie attributes:\n\n{attribute_str}\n"
 
     return out_str  # Return the final output string

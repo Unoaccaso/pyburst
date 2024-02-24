@@ -43,8 +43,6 @@ class LRUDownloadCache(OrderedDict):
         The current size of the cache in bytes.
     cache_size_mb : float
         The maximum size of the cache in megabytes.
-    cache_contents : list
-        The keys present in the cache.
 
     Notes
     -----
@@ -56,15 +54,13 @@ class LRUDownloadCache(OrderedDict):
     >>> cache['a'] = 1
     >>> cache['b'] = 2
     >>> cache['c'] = 3
-    >>> print(cache.cache_contents)
-    ['a', 'b', 'c']
     >>> print(cache.nbytes)
     XXX bytes
     >>> print(cache.cache_size_mb)
     1.0
     """
 
-    def __init__(self, max_size_mb: float = 100):
+    def __init__(self, max_size_mb: float = 100, is_cache: bool = True):
         super().__init__()
         self._max_size_bytes = max_size_mb * (1024 * 1024)  # Convert MB to bytes
 
@@ -91,8 +87,11 @@ class LRUDownloadCache(OrderedDict):
         return size
 
     def _evict_least_recently_used(self):
-        key, _ = self.popitem(last=False)  # Remove the least recent item
-        warn(f"Removed {key} to free cache space.")
+        try:
+            key, _ = self.popitem(last=False)  # Remove the least recent item
+            warn(f"Removed {key} to free cache space.")
+        except KeyError:
+            raise ValueError(f"Serie is to big to cache!")
 
     @property
     def cache_size_mb(self):
@@ -104,13 +103,6 @@ class LRUDownloadCache(OrderedDict):
     @property
     def max_size_bytes(self):
         return self._max_size_bytes
-
-    @property
-    def cache_contents(self):
-        """
-        list: The keys present in the cache.
-        """
-        return list(self.keys())
 
     def __repr__(self):
         return _download_cache_repr(self)
@@ -128,11 +120,12 @@ def _download_cache_repr(download_cache: LRUDownloadCache):
         ]
     ]
     for key, serie in download_cache.items():
+        dtype_str = str(type(serie.values)).split("'")[1]
         rows.append(
             [
                 key[0],
                 key[1],
-                f"[{type(serie.values)}<{serie.values.dtype}>]",
+                f"[{dtype_str}<{serie.values.dtype}>]",
                 f"{serie.duration: .1e}",
                 _format_size(serie.nbytes),
                 f"{serie.nbytes / download_cache.max_size_bytes * 100 : .2f} %",

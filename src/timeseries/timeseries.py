@@ -27,14 +27,19 @@ import gwpy.timeseries, gwosc
 
 class TimeSeries:
     _cache_size_mb = 1_000
-    _DOWNLOAD_CACHE = LRUDownloadCache(max_size_mb=_cache_size_mb)
+    _DATA_CACHE = LRUDownloadCache(max_size_mb=_cache_size_mb)
 
     @classmethod
     @type_check(classmethod=True)
     def set_cache_size_mb(cls, value: _FLOAT_LIKE | _INT_LIKE):
         cls._cache_size_mb = value
         warnings.warn("cache is being deleted!")
-        cls._DOWNLOAD_CACHE = LRUDownloadCache(value)
+        cls._DATA_CACHE = LRUDownloadCache(value)
+
+    @classmethod
+    @type_check(classmethod=True)
+    def read_cached_data(cls, segment_name: str, detector_id: str):
+        return cls._DATA_CACHE[segment_name, detector_id]
 
     @classmethod
     @type_check(classmethod=True)
@@ -50,6 +55,8 @@ class TimeSeries:
         sampling_rate: _INT_LIKE = None,
         t0_gps: _FLOAT_LIKE = None,
         duration: _FLOAT_LIKE = None,
+        force_cache_overwrite: bool = True,
+        cache_results: bool = True,
     ):
         """
         Construct a TimeSeries object from an array.
@@ -194,17 +201,28 @@ class TimeSeries:
             warnings.warn(
                 f"sampling rate should be a power of 2. Other values are allowed but can result in unexpected behaviour."
             )
+        non_series_attr = ["cache_results", "force_cache_overwrite"]
+        for attr in non_series_attr:
+            kwargs.pop(attr)
 
         if isinstance(values, numpy.ndarray):
-            return _CPUSeries(**kwargs)
-        if isinstance(values, cupy.ndarray):
+            out_series = _CPUSeries(**kwargs)
+        elif isinstance(values, cupy.ndarray):
             return
         else:
             raise NotImplementedError(
                 f"{type(values)} type for values is not supported."
             )
 
-    # TODO: DOCSTRINGS!!!
+        if cache_results:
+            if (
+                segment_name,
+                detector_id,
+            ) not in cls._DATA_CACHE or force_cache_overwrite:
+                cls._DATA_CACHE[(segment_name, detector_id)] = out_series
+
+        return out_series
+
     @classmethod
     @type_check(classmethod=True)
     def from_gwpy(
@@ -216,6 +234,63 @@ class TimeSeries:
         reference_time_gps: _FLOAT_LIKE | None = None,
         use_gpu: bool = False,
     ):
+        """
+        Create a TimeSeries object from a gwpy.timeseries.TimeSeries object.
+
+        This method converts a `gwpy.timeseries.TimeSeries` object into a `TimeSeries` object,
+        which is part of the current library. It allows for seamless integration of GWPy data
+        with other data processing tools provided in this library.
+
+        Parameters
+        ----------
+        gwpy_timeseries : gwpy.timeseries.TimeSeries
+            The gwpy TimeSeries object to be converted.
+        segment_name : str
+            Name of the segment.
+        detector_id : str
+            Identifier of the detector.
+        duration : Union[float, float32, float64], optional
+            Duration of the time series. If not provided, it will be inferred from the gwpy Timeseries.
+        reference_time_gps : Union[float, float32, float64], optional
+            Reference GPS time. If provided, it sets the GPS time of the starting point for the time series.
+            If not provided, it will be inferred from the first time stamp of the gwpy Timeseries.
+        use_gpu : bool, optional
+            If True, utilize GPU for processing.
+
+        Returns
+        -------
+        TimeSeries
+            Time series object.
+
+        Raises
+        ------
+        NotImplementedError
+            If conversion is not supported for the given input type.
+
+        Examples
+        --------
+        Convert a gwpy TimeSeries object into a TimeSeries object:
+
+        >>> import gwpy.timeseries as gw
+        >>> from mylibrary import TimeSeries
+        >>> # Assuming 'gwpy_timeseries' is a gwpy.timeseries.TimeSeries object
+        >>> # with some data loaded.
+        >>> ts = TimeSeries.from_gwpy(
+        ...     gwpy_timeseries=gwpy_timeseries,
+        ...     segment_name="GWPy Data",
+        ...     detector_id="H1",
+        ... )
+
+        Convert a gwpy TimeSeries object into a TimeSeries object with a specified duration and reference time:
+
+        >>> ts = TimeSeries.from_gwpy(
+        ...     gwpy_timeseries=gwpy_timeseries,
+        ...     segment_name="GWPy Data",
+        ...     detector_id="H1",
+        ...     duration=10.0,  # Duration set to 10 seconds
+        ...     reference_time_gps=123456789.0,  # Reference GPS time set to a specific value
+        ... )
+        """
 
         if use_gpu:
             values = cupy.array(gwpy_timeseries.value, dtype=numpy.float32)
@@ -297,7 +372,6 @@ class TimeSeries:
                     f"Failed downloading too many times ({current_attempt})"
                 )
 
-    # TODO
     @classmethod
     @type_check(classmethod=True)
     def fetch_event(
@@ -313,6 +387,71 @@ class TimeSeries:
         force_cache_overwrite: bool = False,
         cache_results: bool = True,
     ):
+        """
+        Fetch data for multiple events and detectors and create TimeSeries objects.
+
+        This method fetches data for multiple events and detectors in parallel and creates
+        corresponding TimeSeries objects. It provides flexibility in specifying the duration,
+        sampling rate, and other parameters for fetching data. Additionally, it handles caching
+        of fetched data for improved performance.
+
+        Parameters
+        ----------
+        event_names : str | list[str]
+            Name(s) of the event(s).
+        detector_ids : str | list[str]
+            Identifier(s) of the detector(s).
+        duration : Union[float, float32, float64], optional
+            Duration of the time series. Default is 100.0 seconds.
+        sampling_rate : Union[int, int32, int64], optional
+            Sampling rate of the time series. Default is 4096 Hz.
+        repeat_on_failure : bool, optional
+            Whether to repeat the fetch operation on failure. Default is True.
+        max_attempts : Union[int, int32, int64], optional
+            Maximum number of attempts for fetching. Default is 100.
+        verbose : bool, optional
+            Whether to print verbose output. Default is False.
+        use_gpu : bool, optional
+            If True, utilize GPU for processing. Default is False.
+        force_cache_overwrite : bool, optional
+            Whether to force overwrite cached data. Default is False.
+        cache_results : bool, optional
+            Whether to cache fetched results. Default is True.
+
+        Returns
+        -------
+        dict
+            Dictionary containing TimeSeries objects with keys as event-detector pairs.
+
+        Raises
+        ------
+        ConnectionError
+            If fetching fails after maximum attempts.
+
+        Examples
+        --------
+        Fetch data for a single event and detector:
+
+        >>> from mylibrary import TimeSeries
+        >>> ts_data = TimeSeries.fetch_event(
+        ...     event_names="GWEvent1",
+        ...     detector_ids="H1",
+        ...     duration=50.0,  # Duration set to 50 seconds
+        ...     sampling_rate=2048,  # Sampling rate set to 2048 Hz
+        ...     verbose=True  # Verbose output enabled
+        ... )
+
+        Fetch data for multiple events and detectors:
+
+        >>> ts_data = TimeSeries.fetch_event(
+        ...     event_names=["GWEvent1", "GWEvent2"],
+        ...     detector_ids=["H1", "L1"],
+        ...     duration=100.0,  # Duration set to 100 seconds
+        ...     sampling_rate=4096,  # Sampling rate set to 4096 Hz
+        ...     use_gpu=True,  # Utilize GPU for processing
+        ... )
+
+        """
         if isinstance(event_names, str):
             event_names = [event_names]
         if isinstance(detector_ids, str):
@@ -338,13 +477,13 @@ class TimeSeries:
                 )
                 for event_name in event_names
                 for detector_id in detector_ids
-                if (event_name, detector_id) not in cls._DOWNLOAD_CACHE
-                or duration != cls._DOWNLOAD_CACHE[(event_name, detector_id)].duration
+                if (event_name, detector_id) not in cls._DATA_CACHE
+                or duration != cls._DATA_CACHE[(event_name, detector_id)].duration
                 or force_cache_overwrite
                 or (
                     use_gpu
                     and not isinstance(
-                        cls._DOWNLOAD_CACHE[(event_name, detector_id)],
+                        cls._DATA_CACHE[(event_name, detector_id)],
                         cupy.ndarray,
                     )
                 )
@@ -355,9 +494,18 @@ class TimeSeries:
                 event_name = timeserie.segment_name
                 detector_id = timeserie.detector_id
                 out_var[(event_name, detector_id)] = timeserie
+                event_names.remove(event_name) if event_name in event_names else ...
+                detector_ids.remove(detector_id) if detector_id in detector_ids else ...
+
+            # filling all the cached data
+            for event_name in event_names:
+                for detector_id in detector_ids:
+                    out_var[(event_name, detector_id)] = cls._DATA_CACHE[
+                        (event_name, detector_id)
+                    ]
 
         if cache_results:
-            cls._DOWNLOAD_CACHE.update(out_var)
+            cls._DATA_CACHE.update(out_var)
 
         return out_var
 
