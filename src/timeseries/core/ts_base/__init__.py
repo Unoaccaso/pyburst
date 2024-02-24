@@ -1,7 +1,7 @@
 """
 Copyright (C) 2024 unoaccaso <https://github.com/Unoaccaso>
 
-Created Date: Friday, February 23rd 2024, 7:25:31 pm
+Created Date: Thursday, February 22nd 2024, 11:54:01 am
 Author: unoaccaso
 
 This program is free software: you can redistribute it and/or modify it under
@@ -13,3 +13,5 @@ PURPOSE. See the GNU Affero General Public License for more details.
 You should have received a copy of the GNU Affero General Public License
 along with this program. If not, see <https: //www.gnu.org/licenses/>.
 """
+
+from .ts_base import _TimeSeriesBase, _BaseSeriesAttrs

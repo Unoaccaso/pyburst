@@ -21,7 +21,7 @@ import pandas
 
 import sys
 
-from ..common._sys import _format_size, _obj_size
+from ._sys import _format_size, _obj_size
 
 from tabulate import tabulate
 

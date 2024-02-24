@@ -18,8 +18,8 @@ along with this program. If not, see <https: //www.gnu.org/licenses/>.
 import typing
 
 # * my modules
-from . import _cputs_analysis, _cputs_signal_processing
-from .. import _ts_base
+from . import cputs_analysis, cputs_signal_processing
+from .. import ts_base
 from ...common._typing import type_check
 
 # * numpy stuff
@@ -29,7 +29,7 @@ import astropy
 import sys
 
 
-class _CPUSeries(_ts_base._TimeSeriesBase):
+class _CPUSeries(ts_base._TimeSeriesBase):
 
     def __init__(
         self,
@@ -69,13 +69,13 @@ class _CPUSeries(_ts_base._TimeSeriesBase):
     @property
     def fft_values(self):
         if self._fft_values is None:
-            self._fft_values = _cputs_analysis._compute_fft(self)
+            self._fft_values = cputs_analysis._compute_fft(self)
         return self._fft_values
 
     @property
     def fft_frequencies(self):
         if self._fft_frequencies is None:
-            self._fft_frequencies = _cputs_analysis._compute_fft_freqs(self)
+            self._fft_frequencies = cputs_analysis._compute_fft_freqs(self)
         return self._fft_frequencies
 
     def crop(self, start, stop, time_fmt: str = "gps"):
@@ -110,7 +110,7 @@ class _CPUSeries(_ts_base._TimeSeriesBase):
         If other supported formats are specified, the crop will always be done using gps time, to ensure consistency
 
         """
-        kwargs = _cputs_signal_processing._crop(
+        kwargs = cputs_signal_processing._crop(
             self,
             start,
             stop,

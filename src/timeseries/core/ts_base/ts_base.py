@@ -21,7 +21,7 @@ import sys
 
 import numpy
 
-from . import _ts_repr
+from . import ts_repr
 from ...common._typing import type_check
 
 
@@ -289,4 +289,4 @@ class _TimeSeriesBase(abc.ABC, _BaseSeriesAttrs):
 
     @abc.abstractmethod
     def __repr__(self) -> str:
-        return _ts_repr._repr_timeserie(self)
+        return ts_repr._repr_timeserie(self)

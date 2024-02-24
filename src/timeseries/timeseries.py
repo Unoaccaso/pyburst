@@ -16,10 +16,12 @@ along with this program. If not, see <https: //www.gnu.org/licenses/>.
 
 import warnings
 import concurrent
+import typing
 
 from .common._typing import type_check, _ARRAY_LIKE, _FLOAT_LIKE, _INT_LIKE, _FLOAT_EPS
-from .core._cpu_series import _CPUSeries
-from .core._caching import LRUDownloadCache
+from .core.cpu_series import _CPUSeries
+from .common.caching import LRUDownloadCache
+from .core.ts_base.backends import BackendEntrypoint
 
 import numpy, cupy
 import gwpy.timeseries, gwosc
@@ -517,7 +519,13 @@ class TimeSeries:
     # TODO
     @classmethod
     @type_check(classmethod=True)
-    def from_zarr(cls): ...
+    def read_zarr(cls): ...
+
+    # TODO
+    @classmethod
+    @type_check(classmethod=True)
+    def read_data(cls, path: str | list[str], engine: typing.Type[BackendEntrypoint]):
+        return engine(path)
 
     # TODO
     @classmethod
