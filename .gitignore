@@ -6,3 +6,4 @@
 *.zarr
 *.h5
 *.hdf*
+saves/
