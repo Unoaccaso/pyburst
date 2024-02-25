@@ -102,7 +102,7 @@ class LRUDownloadCache(OrderedDict):
         return self._max_size_bytes
 
     def __repr__(self):
-        return _download_cache_repr(self)
+        return _cache_repr(self)
 
     @type_check(classmethod=True)
     def read_cached_data(
@@ -146,10 +146,13 @@ class LRUDownloadCache(OrderedDict):
                 key = (segment_name, detector_id)
                 if key in self and key not in out_dict:
                     out_dict[key] = self[key]
-        return out_dict
+        if len(detector_ids) == 1 and len(segment_names) == 1:
+            return out_dict[key]
+        else:
+            return out_dict
 
 
-def _download_cache_repr(download_cache: LRUDownloadCache):
+def _cache_repr(download_cache: LRUDownloadCache):
     rows = [
         [
             "event name",

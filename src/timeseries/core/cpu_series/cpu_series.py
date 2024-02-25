@@ -20,13 +20,9 @@ import typing
 # * my modules
 from . import cputs_analysis, cputs_signal_processing
 from .. import ts_base
-from ...common._typing import type_check
 
 # * numpy stuff
 import numpy, numpy.typing
-
-import astropy
-import sys
 
 
 class _CPUSeries(ts_base._TimeSeriesBase):
@@ -80,7 +76,7 @@ class _CPUSeries(ts_base._TimeSeriesBase):
 
     def crop(self, start, stop, time_fmt: str = "gps"):
         """
-        Crop the time series to the specified start and stop times.
+        Crop the time self to the specified start and stop times.
 
         Parameters
         ----------
@@ -94,19 +90,19 @@ class _CPUSeries(ts_base._TimeSeriesBase):
         Returns
         -------
         _CPUSeries
-            A cropped instance of the time series.
+            A cropped instance of the time self.
 
         Raises
         ------
         AssertionError
-            If the stop time is beyond the end of the time series.
-            If the start time is before the beginning of the time series.
+            If the stop time is beyond the end of the time self.
+            If the start time is before the beginning of the time self.
 
         Notes
         -----
-        This method crops the time series to the specified start and stop times.
+        This method crops the time self to the specified start and stop times.
         The start and stop times are specified in GPS time format unless otherwise specified.
-        The returned instance is a cropped version of the original time series.
+        The returned instance is a cropped version of the original time self.
         If other supported formats are specified, the crop will always be done using gps time, to ensure consistency
 
         """
@@ -118,9 +114,8 @@ class _CPUSeries(ts_base._TimeSeriesBase):
         )
         return _CPUSeries(**kwargs)
 
-    # ! TODO
-    @property
-    def cache(self): ...
+    def save(self, path: str, fmt: str = "zarr"):
+        return super().save(path, fmt)
 
     def __repr__(self) -> str:
         return super().__repr__()

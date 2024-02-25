@@ -21,7 +21,9 @@ import typing
 from .common._typing import type_check, _ARRAY_LIKE, _FLOAT_LIKE, _INT_LIKE, _FLOAT_EPS
 from .core.cpu_series import _CPUSeries
 from .common.caching import LRUDownloadCache
-from .core.ts_base.backends import BackendEntrypoint
+
+from .core.ts_base.backend.common import SaveBackend, ReadBackend
+from .core.ts_base.backend.api import ENGINES
 
 import numpy, cupy
 import gwpy.timeseries, gwosc
@@ -166,7 +168,7 @@ class TimeSeries:
             gps_times_shape = numpy.ceil(duration * kwargs["sampling_rate"] - 1).astype(
                 numpy.int64
             )
-            if len(values) != gps_times_shape:
+            if numpy.prod(values.shape) != gps_times_shape:
                 raise ValueError(
                     f"values have shape: {len(values)}, but input time data gives a gps_times array with shape {gps_times_shape}"
                 )
@@ -535,12 +537,9 @@ class TimeSeries:
     # TODO
     @classmethod
     @type_check(classmethod=True)
-    def read_zarr(cls): ...
-
-    # TODO
-    @classmethod
-    @type_check(classmethod=True)
-    def read_data(cls, path: str | list[str], engine: typing.Type[BackendEntrypoint]):
+    def read_data(
+        cls, path: str | list[str], engine: typing.Type[ReadBackend] = ENGINES["zarr"]
+    ):
         return engine(path)
 
     # TODO

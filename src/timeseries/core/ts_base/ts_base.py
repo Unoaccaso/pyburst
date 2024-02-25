@@ -14,7 +14,6 @@ You should have received a copy of the GNU Affero General Public License
 along with this program. If not, see <https: //www.gnu.org/licenses/>.
 """
 
-from dataclasses import dataclass, asdict
 import abc
 import warnings
 import sys
@@ -23,6 +22,7 @@ import numpy
 
 from . import ts_repr
 from ...common._typing import type_check
+from .backend.api import ENGINES
 
 
 _DECODE_DETECTOR = {
@@ -88,6 +88,8 @@ class _BaseSeriesAttrs:
         self._t0_gps = t0_gps
         self._duration = duration
         self.validate_reference_time(reference_time_gps)
+
+        self.array_items = ["values", "gps_times", "fft_values", "fft_frequencies"]
 
     def validate_detector_id(self, detector_id):
         """
@@ -233,7 +235,29 @@ class _TimeSeriesBase(abc.ABC, _BaseSeriesAttrs):
     common to all the below, ensuring the firm.
     """
 
-    # * Shared functions
+    # * ABSTRACT PROPERTIES
+
+    @abc.abstractproperty
+    def values(self): ...
+
+    @abc.abstractproperty
+    def gps_times(self): ...
+
+    @abc.abstractproperty
+    def fft_values(self): ...
+
+    @abc.abstractproperty
+    def fft_frequencies(self): ...
+
+    @abc.abstractproperty
+    def nbytes(self):
+        self_content = self.__dict__
+        size = 0
+        for _, item in self_content.items():
+            size += item.nbytes if hasattr(item, "nbytes") else sys.getsizeof(item)
+        return size
+
+    # * FUNCTIONS
 
     def __getattribute__(self, attr: str):
         try:
@@ -244,7 +268,7 @@ class _TimeSeriesBase(abc.ABC, _BaseSeriesAttrs):
     def __getitem__(self, key):
         return self._values.__getitem__(key)
 
-    # * Functions
+    # * ABSTRACT FUNCTIONS
 
     @abc.abstractmethod
     def crop(self, start, stop, time_fmt: str = "gps"):
@@ -262,30 +286,42 @@ class _TimeSeriesBase(abc.ABC, _BaseSeriesAttrs):
         """
         ...
 
-    # * Parameters
+    @abc.abstractmethod
+    def save(self, path: str, fmt: str = "zarr"):
+        """Save data and metadata to files in parallel.
 
-    @abc.abstractproperty
-    def values(self): ...
+        This method saves the data to files in either Zarr or HDF5 format in parallel,
+        while also saving the metadata separately in HDF5 format.
 
-    @abc.abstractproperty
-    def gps_times(self): ...
+        Args:
+            path (str): The directory path where the files will be saved.
+            fmt (str, optional): The format for saving data ('zarr' or 'hdf5'). Defaults to 'zarr'.
 
-    @abc.abstractproperty
-    def cache(self): ...
+        Raises:
+            NotImplementedError: If the specified format is not supported.
 
-    @abc.abstractproperty
-    def fft_values(self): ...
+        Example:
+            To save data and metadata to files in parallel, first create an instance of YourClassName
+            and set its attributes:
 
-    @abc.abstractproperty
-    def fft_frequencies(self): ...
+            >>> instance = YourClassName()
+            >>> instance.segment_name = "Segment1"
+            >>> instance.detector_id = 1
+            >>> instance.reference_time_gps = 123456789
+            >>> instance.values = ...  # Assign the data values
+            >>> instance.gps_times = ...  # Assign the GPS times
+            >>> instance.fft_values = ...  # Assign the FFT values
+            >>> instance.fft_frequencies = ...  # Assign the FFT frequencies
 
-    @abc.abstractproperty
-    def nbytes(self):
-        self_content = self.__dict__
-        size = 0
-        for _, item in self_content.items():
-            size += item.nbytes if hasattr(item, "nbytes") else sys.getsizeof(item)
-        return size
+            Then, call the save method with the directory path and format:
+
+            >>> instance.save("/path/to/save", fmt="zarr")
+        """
+        # Check if the format is supported
+        if fmt not in ENGINES:
+            raise NotImplementedError(f"{fmt} is not a supported format")
+        else:
+            ENGINES[fmt].save_data(self, path)
 
     @abc.abstractmethod
     def __repr__(self) -> str:

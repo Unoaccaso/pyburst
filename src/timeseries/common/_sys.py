@@ -15,7 +15,6 @@ along with this program. If not, see <https: //www.gnu.org/licenses/>.
 """
 
 import sys
-import numpy, cupy.typing, pandas, dask.array
 
 
 def _obj_size(obj):

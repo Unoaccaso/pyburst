@@ -15,6 +15,11 @@ along with this program. If not, see <https: //www.gnu.org/licenses/>.
 """
 
 
-class BackendEntrypoint:
+class ReadBackend:
     def open_data(self, path: str | list[str]):
+        return NotImplementedError
+
+
+class SaveBackend:
+    def save_data(self, path: str):
         return NotImplementedError
