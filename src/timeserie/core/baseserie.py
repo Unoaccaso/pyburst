@@ -26,6 +26,7 @@ from timeserie.common._typing import type_check
 
 # from timeself.backends.api import ENGINES
 from timeserie.common._sys import format_size
+from timeserie.caching import LRUCache
 
 import tabulate
 import polars
@@ -241,6 +242,9 @@ class _TimeSeriesBase(abc.ABC, _BaseSeriesAttrs):
     (ex. GPU, CPU, Lazy etc.). It implements all the basic functionalities,
     common to all the below, ensuring the firm.
     """
+
+    _cache_size_mb = 1_000
+    CACHE = LRUCache(max_size_mb=_cache_size_mb)
 
     # * ABSTRACT PROPERTIES
 

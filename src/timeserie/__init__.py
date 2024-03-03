@@ -15,10 +15,13 @@ along with this program. If not, see <https: //www.gnu.org/licenses/>.
 """
 
 from .caching import LRUCache
+from .core.baseserie import _TimeSeriesBase
 
-_cache_size_mb = 1_000
-CACHE = LRUCache(max_size_mb=_cache_size_mb)
+CACHE = _TimeSeriesBase.CACHE
+
 
 from .convert import from_array, from_gwpy
 from .download import fetch_by_name, fetch_by_gps
 from .backends.api import from_file
+
+__all__ = ["CACHE"]

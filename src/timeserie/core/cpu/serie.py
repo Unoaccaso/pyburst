@@ -18,11 +18,13 @@ along with this program. If not, see <https: //www.gnu.org/licenses/>.
 import typing
 
 # * my modules
-from timeserie.core.cpu import signal
 from timeserie.core import baseserie
 
 # * numpy stuff
 import numpy, numpy.typing
+
+# * GW
+import astropy
 
 
 class CPUSerie(baseserie._TimeSeriesBase):
@@ -69,13 +71,13 @@ class CPUSerie(baseserie._TimeSeriesBase):
     @property
     def fft_values(self):
         if self._fft_values is None:
-            self._fft_values = signal.fft(self)
+            self._fft_values = _fft(self)
         return self._fft_values
 
     @property
     def fft_frequencies(self):
         if self._fft_frequencies is None:
-            self._fft_frequencies = signal.fftfreqs(self)
+            self._fft_frequencies = _fftfreqs(self)
         return self._fft_frequencies
 
     def crop(self, start, stop, time_fmt: str = "gps"):
@@ -110,16 +112,83 @@ class CPUSerie(baseserie._TimeSeriesBase):
         If other supported formats are specified, the crop will always be done using gps time, to ensure consistency
 
         """
-        kwargs = signal._crop(
+        return _crop(
             self,
             start,
             stop,
             time_fmt,
         )
-        return CPUSerie(**kwargs)
 
     def save(self, path: str, fmt: str = "zarr"):
         return super().save(path, fmt)
 
     def __repr__(self) -> str:
         return super().__repr__()
+
+
+def _crop(cpu_serie: CPUSerie, start, stop, time_fmt: str = "gps"):
+    """
+    Crop the time self to the specified start and stop times.
+
+    Parameters
+    ----------
+    start : numpy.float64
+        Start time of the cropped segment.
+    stop : numpy.float64
+        Stop time of the cropped segment.
+    time_fmt : str, optional
+        Format of the start and stop times. Default is "gps".
+
+    Returns
+    -------
+    CPUSerie
+        A cropped instance of the time self.
+
+    Raises
+    ------
+    AssertionError
+        If the stop time is beyond the end of the time self.
+        If the start time is before the beginning of the time self.
+
+    Notes
+    -----
+    This method crops the time self to the specified start and stop times.
+    The start and stop times are specified in GPS time format unless otherwise specified.
+    The returned instance is a cropped version of the original time self.
+    If other supported formats are specified, the crop will always be done using gps time, to ensure consistency
+
+    """
+    if time_fmt != "gps":
+        start = numpy.float64(astropy.time.Time(start, format=time_fmt).gps)
+        end = numpy.float64(astropy.time.Time(end, format=time_fmt).gps)
+    start_idx = int((start - cpu_serie.t0_gps) // cpu_serie.dt)
+    end_idx = int((stop - cpu_serie.t0_gps) // cpu_serie.dt)
+    assert end_idx <= len(cpu_serie.values), f"stop time is too big!"
+    assert start_idx >= 0, f"start time is too small!"
+    new_t0_gps = numpy.float64(start)
+    new_duration = numpy.float64(stop - start)
+    gps_times = (
+        numpy.arange(
+            new_duration + 1 / cpu_serie.sampling_rate,
+            step=1 / cpu_serie.sampling_rate,
+        )
+        + new_t0_gps
+    ).astype(numpy.float64)
+
+    return CPUSerie(
+        values=cpu_serie.values[start_idx : end_idx + 1],
+        gps_times=gps_times,
+        t0_gps=new_t0_gps,
+        duration=new_duration,
+        sampling_rate=cpu_serie.sampling_rate,
+        detector_id=cpu_serie.detector_id,
+        reference_time_gps=cpu_serie.reference_time_gps,
+        segment_name=cpu_serie.segment_name,
+        dt=cpu_serie.dt,
+    )
+
+
+def _fft(cpu_serie: CPUSerie): ...
+
+
+def _fftfreqs(cpu_serie: CPUSerie): ...

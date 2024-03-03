@@ -36,6 +36,7 @@ class ZarrStore(ReadBackend):
             file_path = [file_path]
 
         futures = []
+        # ! TODO: FINIRE IL CODICE PER LA LETTURA DEI FILES, IL PARALLELO DEVE ESSERE SUGLI EVENTI
         with concurrent.futures.ThreadPoolExecutor() as executor:
             for path in file_path:
                 future = executor.submit(cls._read_zarr_file, path)
