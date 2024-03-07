@@ -1,7 +1,7 @@
 """
 Copyright (C) 2024 unoaccaso <https://github.com/Unoaccaso>
 
-Created Date: Thursday, February 22nd 2024, 11:54:28 am
+Created Date: Wednesday, March 6th 2024, 3:36:54 pm
 Author: unoaccaso
 
 This program is free software: you can redistribute it and/or modify it under
@@ -14,420 +14,382 @@ You should have received a copy of the GNU Affero General Public License
 along with this program. If not, see <https: //www.gnu.org/licenses/>.
 """
 
-import abc
-import warnings
-import sys
-import os
-import pathlib
-
 import numpy
-
-from timeserie.common._typing import type_check
-
-# from timeself.backends.api import ENGINES
-from timeserie.common._sys import format_size
-from timeserie.caching import LRUCache
-
+from numpy import int32, int64, float32, float64, complex64, complex128
+from abc import ABC, abstractmethod, abstractproperty
+from dataclasses import dataclass, asdict
+from enum import Enum
 import tabulate
-import polars
-import zarr
+import sys
+
+from timeserie.common import _typing
+from timeserie.caching import LRUCache
+from timeserie.common._sys import format_size
 
 
-_DECODE_DETECTOR = {
-    "L1": "Ligo Livingston (L1)",
-    "H1": "Ligo Hanford (H1)",
-    "V1": "Virgo (V1)",
-    "-": "-",
-}
+class Detectors(Enum):
+    L1 = "Ligo Livingston (L1)"
+    H1 = "Ligo Hanford (H1)"
+    V1 = "Virgo (V1)"
+    _ = "_"
 
 
-class _BaseSeriesAttrs:
+@dataclass
+class BaseSeriesAttrs:
     """
-    Base class for common series attributes.
+    Attributes of a Time Series.
 
-    This class defines the basic attributes common to all series classes.
+    This data class defines the attributes of a Time Series, including its segment name,
+    detector ID, start time, duration, time step, and sampling rate. It ensures data integrity
+    checks during initialization.
+
+    Parameters
+    ----------
+    segment_name : str
+        Name of the segment. Must be a string representing the segment's identifier.
+
+    detector : Detectors
+        Identifier of the detector. Must be one of the predefined detector types (L1, H1, V1).
+
+    t0_gps : float64
+        Reference GPS time. It indicates the starting time of the time series data. Must be a positive float.
+
+    duration : float64
+        Duration of the time series in seconds. Must be a positive float.
+
+    dt : float64
+        Time step or sampling interval of the time series. Must be a positive float.
+
+    sampling_rate : int64
+        Sampling rate of the time series in Hertz (Hz). Must be a power of 2 and smaller than 4096.
+
+    Raises
+    ------
+    ValueError
+        If input data types or values are invalid.
+
+    Data Integrity Checks:
+    ----------------------
+    - `segment_name`: Must be a string representing the segment's identifier.
+    - `detector`: Must be one of the predefined detector types (L1, H1, V1).
+    - `t0_gps`: Must be a positive float representing the reference GPS time.
+    - `duration`: Must be a positive float representing the duration of the time series.
+    - `dt`: Must be a positive float representing the time step or sampling interval.
+    - `sampling_rate`: Must be a power of 2 and smaller than 4096, representing the sampling rate in Hertz (Hz).
+
+    These integrity checks ensure that the Time Series attributes are valid and consistent, meeting the required criteria for further processing and analysis.
     """
 
-    @type_check(classmethod=True)
-    def __init__(
-        self,
-        segment_name: str,
-        detector_id: str,
-        t0_gps: numpy.float64,
-        duration: numpy.float64,
-        dt: numpy.float64,
-        sampling_rate: numpy.int64,
-        reference_time_gps: numpy.float64 | None = None,
-        detector_name: str | None = None,
-    ):
-        """
-        Initialize the BaseSeriesAttrs object.
+    segment_name: str
+    detector: Detectors
+    t0_gps: float64
+    duration: float64
+    dt: float64
+    sampling_rate: int64
 
-        Parameters
-        ----------
-        segment_name : str
-            Name of the segment.
-        detector_id : str
-            ID of the detector.
-        t0_gps : numpy.float64
-            GPS start time.
-        duration : numpy.float64
-            Duration of the segment.
-        dt : numpy.float64
-            Time step.
-        sampling_rate : numpy.int64
-            Sampling rate.
-        reference_time_gps : numpy.float64, optional
-            Reference time in GPS. Defaults to None.
-        detector_name : str, optional
-            Name of the detector. Defaults to None.
+    def __post_init__(self):
 
-        Raises
-        ------
-        ValueError
-            If detector_id is not supported.
-            If provided detector_name is not valid for the given detector_id.
-            If dt and sampling rate are incompatible.
-        """
-        self._segment_name = segment_name
-        self.validate_detector_id(detector_id)
-        self.validate_detector_name(detector_name)
-        self.validate_time_data(dt, sampling_rate)
-        self._t0_gps = t0_gps
-        self._duration = duration
-        self.validate_reference_time(reference_time_gps)
+        # Check for data type
+        # ===================
+        if not isinstance(self.segment_name, str):
+            raise ValueError(f"segment_name must be a string.")
+        if not isinstance(self.detector, Detectors):
+            raise ValueError(f"detector must be a Detector.")
+        if not isinstance(self.t0_gps, float64):
+            raise ValueError(f"t0_gps must be a float64.")
+        if not isinstance(self.duration, float64):
+            raise ValueError(f"duration must be a float64.")
+        if not isinstance(self.dt, float64):
+            raise ValueError(f"dt must be a float64.")
+        if not isinstance(self.sampling_rate, int64):
+            raise ValueError(f"sampling_rate must be a int64.")
 
-        self.array_items = ["values", "gps_times", "fft_values", "fft_frequencies"]
+        # Checks for data integrity
+        # =========================
 
-    def validate_detector_id(self, detector_id):
-        """
-        Validate the detector ID.
+        # Sampling rate must be a power of 2, smaller than 4096
+        if not (numpy.log2(self.sampling_rate) % 1 == 0 and self.sampling_rate <= 4096):
+            raise ValueError("Sampling rate must be a power of 2, smaller than 4096")
 
-        Parameters
-        ----------
-        detector_id : str
-            ID of the detector.
+        # dt and sampling rate compatibility
+        if not (1 / self.dt == self.sampling_rate):
+            raise ValueError("dt and sampling_rate are not compatible.")
 
-        Raises
-        ------
-        ValueError
-            If detector_id is not supported.
-        """
-        if detector_id in _DECODE_DETECTOR:
-            self._detector_id = detector_id
-        else:
-            raise ValueError(f"{detector_id} is not a supported detector")
-
-    def validate_detector_name(self, detector_name):
-        """
-        Validate the detector name.
-
-        Parameters
-        ----------
-        detector_name : str
-            Name of the detector.
-
-        Raises
-        ------
-        ValueError
-            If provided detector_name is not valid for the given detector_id.
-        """
-        if detector_name is None or detector_name == _DECODE_DETECTOR[self.detector_id]:
-            self._detector_name = _DECODE_DETECTOR[self.detector_id]
-        else:
+        # t0 compatibility
+        if self.t0_gps < 0:
+            raise ValueError("t0_gps must be positive")
+        elif not (self.t0_gps == numpy.floor(self.t0_gps / self.dt) * self.dt):
             raise ValueError(
-                f"{self._detector_id} is the id for {_DECODE_DETECTOR[self._detector_id]}, not {detector_name}"
+                f"t0_gps: {self.t0_gps} is incompatible with dt and sampling rate.\n\nThe correct value should be {numpy.floor(self.t0_gps / self.dt) * self.dt}"
             )
 
-    def validate_time_data(self, dt, sampling_rate):
-        """
-        Validate time data.
+        # duration compatibility
+        if not (self.duration == numpy.ceil(self.duration / self.dt) * self.dt):
+            raise ValueError("duration is incompatible with dt and sampling rate")
 
-        Parameters
-        ----------
-        dt : numpy.float64
-            Time step.
-        sampling_rate : numpy.int64
-            Sampling rate.
-
-        Raises
-        ------
-        ValueError
-            If dt and sampling rate are incompatible.
-        """
-        if numpy.round(1 / dt).astype(numpy.int64) == sampling_rate:
-            self._dt = dt
-            self._sampling_rate = sampling_rate
+    # modifying the setter to ensure read-only behaviour
+    def __setattr__(self, __name: str, __value) -> None:
+        if hasattr(self, __name):
+            raise PermissionError(f"Attributes are readonly!")
         else:
-            raise ValueError(
-                f"dt: {dt} and sampling rate: {sampling_rate} are not compatible."
-            )
-
-    def validate_reference_time(self, reference_time):
-        """
-        Validate reference time.
-
-        Parameters
-        ----------
-        reference_time : numpy.float64
-            Reference time in GPS.
-
-        Warnings
-        --------
-        UserWarning
-            If reference_time is None, it will be set to t0_gps.
-        """
-        if reference_time is None:
-            self._reference_time_gps = self.t0_gps
-            warnings.warn(f"reference_time_gps set to {self.t0_gps}")
-        else:
-            self._reference_time_gps = reference_time
-
-    @property
-    def segment_name(self) -> str:
-        """str: Name of the segment."""
-        return self._segment_name
-
-    @segment_name.setter
-    def segment_name(self, value: str):
-        self._segment_name = value
-
-    @property
-    def reference_time_gps(self) -> numpy.float64:
-        """numpy.float64: Reference time in GPS."""
-        return self._reference_time_gps
-
-    @reference_time_gps.setter
-    def reference_time_gps(self, value: numpy.float64):
-        self._reference_time_gps = value
-
-    # Readonly attrs
-
-    @property
-    def detector_id(self) -> str:
-        """str: ID of the detector."""
-        return self._detector_id
-
-    @property
-    def detector_name(self) -> str:
-        """str: Name of the detector."""
-        return self._detector_name
-
-    @property
-    def t0_gps(self) -> numpy.float64:
-        """numpy.float64: GPS start time."""
-        return self._t0_gps
-
-    @property
-    def duration(self) -> numpy.float32:
-        """numpy.float32: Duration of the segment."""
-        return self._duration
-
-    @property
-    def dt(self) -> numpy.float32:
-        """numpy.float32: Time step."""
-        return self._dt
-
-    @property
-    def sampling_rate(self) -> numpy.int32:
-        """numpy.int32: Sampling rate."""
-        return self._sampling_rate
+            super().__setattr__(__name, __value)
 
 
-class _TimeSeriesBase(abc.ABC, _BaseSeriesAttrs):
+@dataclass
+class GPS_Interval:
     """
-    Base class for TimeSeries.
+    Represents a GPS time interval.
 
-    This class is the base for all the Series implementation
-    (ex. GPU, CPU, Lazy etc.). It implements all the basic functionalities,
-    common to all the below, ensuring the firm.
+    This data class defines a GPS time interval specified by a start time and a stop time.
+    It ensures data integrity checks during initialization.
+
+    Parameters
+    ----------
+    time_range : list[float]
+        A list representing the start and stop times of the GPS interval. It should contain
+        two elements representing the start and stop times, respectively. Both elements
+        must be positive real numbers, and the start time must be strictly less than the
+        stop time.
+
+    Raises
+    ------
+    ValueError
+        If input data types or values are invalid.
+
+    Examples
+    --------
+    >>> interval = GPS_Interval([123456789.0, 123456799.0])
+    >>> print(interval)
+    GPS_Interval(time_range=[123456789.0, 123456799.0])
+
+    >>> # This will raise a ValueError due to invalid input
+    >>> interval = GPS_Interval([123456799.0, 123456789.0])
+    ValueError: Start time must be smaller than stop time.
+    """
+
+    time_range: list[_typing.REAL_NUM, _typing.REAL_NUM]
+
+    def __post_init__(self):
+        # check input type
+        if not isinstance(self.time_range, list):
+            raise ValueError(f"Range must be a list of numbers.")
+        # check input shape
+        if len(self.time_range) != 2:
+            raise ValueError(f"Range must be a list with 2 elements.")
+        # check list content
+        if not isinstance(self.time_range[0], _typing.REAL_NUM) or not isinstance(
+            self.time_range[1], _typing.REAL_NUM
+        ):
+            raise ValueError(f"Range values must be real numbers.")
+        # check time integrity
+        if self.time_range[0] >= self.time_range[1]:
+            raise ValueError(f"Start time must be smaller than stop time.")
+
+
+class _BaseTimeSerie(ABC):
+    """
+    Abstract base class for Time Series objects.
+
+    Attributes
+    ----------
+    CACHE : LRUCache
+        Cache for storing Time Series data.
+
+    Notes
+    -----
+    Subclasses must implement the following properties and methods:
+    - strain : numpy.ndarray
+        Strain data of the Time Series.
+    - gps_times : numpy.ndarray
+        GPS times corresponding to the strain data.
+    - attrs : _BaseSeriesAttrs
+        Attributes of the Time Series.
+    - fft_values : numpy.ndarray
+        Fourier Transform values of the strain data.
+    - fft_freqs : numpy.ndarray
+        Frequencies corresponding to the Fourier Transform values.
+
+    Methods
+    -------
+    get_time_fmt(new_fmt: str)
+        Convert the time format of the GPS times.
+    __repr__()
+        Return a string representation of the Time Series object.
     """
 
     _cache_size_mb = 1_000
     CACHE = LRUCache(max_size_mb=_cache_size_mb)
 
-    # * ABSTRACT PROPERTIES
-
-    @abc.abstractproperty
-    def values(self): ...
-
-    @abc.abstractproperty
-    def gps_times(self): ...
-
-    @abc.abstractproperty
-    def fft_values(self): ...
-
-    @abc.abstractproperty
-    def fft_frequencies(self): ...
-
-    @abc.abstractproperty
-    def nbytes(self):
-        self_content = self.__dict__
-        size = 0
-        for _, item in self_content.items():
-            size += item.nbytes if hasattr(item, "nbytes") else sys.getsizeof(item)
-        return numpy.int32(size)
-
-    # * FUNCTIONS
-
-    def __getattribute__(self, attr: str):
-        try:
-            return object.__getattribute__(self, attr)
-        except AttributeError:
-            return getattr(self._values, attr)
-
-    def __getitem__(self, key):
-        return self._values.__getitem__(key)
-
-    # * ABSTRACT FUNCTIONS
-
-    @abc.abstractmethod
-    def crop(self, start, stop, time_fmt: str = "gps"):
+    @abstractproperty
+    def strain(self):
         """
-        Time-based indexing.
+        Strain data property.
+
+        Returns
+        -------
+        Array
+            Strain data array.
+        """
+        pass
+
+    @abstractproperty
+    def gps_times(self):
+        """
+        GPS times property.
+
+        Returns
+        -------
+        Array
+            GPS times array.
+        """
+        pass
+
+    @abstractproperty
+    def attrs(self):
+        """
+        Attributes property.
+
+        Returns
+        -------
+        _BaseSeriesAttrs
+            Time Series attributes.
+        """
+        pass
+
+    @abstractproperty
+    def fft_values(self):
+        """
+        FFT values property.
+
+        Returns
+        -------
+        Array
+            FFT values array.
+        """
+        pass
+
+    @abstractproperty
+    def fft_freqs(self):
+        """
+        FFT frequencies property.
+
+        Returns
+        -------
+        Array
+            FFT frequencies array.
+        """
+        pass
+
+    @abstractproperty
+    def nbytes(self):
+        """
+        Number of bytes property.
+
+        Returns
+        -------
+        int
+            Number of bytes occupied by the Time Series data.
+        """
+        pass
+
+    @abstractmethod
+    def get_time_fmt(self, new_fmt: str):
+        """
+        Get time format method.
 
         Parameters
         ----------
-        start : numpy.float64
-            Start time.
-        stop : numpy.float64
-            Stop time.
-        time_fmt : str, optional
-            Time format. Defaults to "gps".
+        new_fmt : str
+            New time format.
+
+        Returns
+        -------
+        TimeSeries
+            Time Series object with the specified time format.
         """
-        ...
+        pass
 
-    @abc.abstractmethod
-    def save(self, path: str, fmt: str = "zarr"):
-        """Save data and metadata to files in parallel.
-
-        This method saves the data to files in either Zarr or HDF5 format in parallel,
-        while also saving the metadata separately in HDF5 format.
-
-        Args:
-            path (str): The directory path where the files will be saved.
-            fmt (str, optional): The format for saving data ('zarr' or 'hdf5'). Defaults to 'zarr'.
-
-        Raises:
-            NotImplementedError: If the specified format is not supported.
-
-        Example:
-            To save data and metadata to files in parallel, first create an instance of YourClassName
-            and set its attributes:
-
-            >>> instance = YourClassName()
-            >>> instance.segment_name = "Segment1"
-            >>> instance.detector_id = 1
-            >>> instance.reference_time_gps = 123456789
-            >>> instance.values = ...  # Assign the data values
-            >>> instance.gps_times = ...  # Assign the GPS times
-            >>> instance.fft_values = ...  # Assign the FFT values
-            >>> instance.fft_frequencies = ...  # Assign the FFT frequencies
-
-            Then, call the save method with the directory path and format:
-
-            >>> instance.save("/path/to/save", fmt="zarr")
+    @abstractmethod
+    def __repr__(self):
         """
-        # Check if the format is supported
-        if fmt not in ["zarr"]:
-            raise NotImplementedError(f"{fmt} is not a supported format")
-        elif fmt == "zarr":
-            save_path = os.path.join(path, f"{self.segment_name}/{self.detector_id}/")
-            pathlib.Path(save_path).mkdir(parents=True, exist_ok=True)
-
-            # Get all attributes of the class as a dictionary
-            class_items = dir(self.__class__)
-            properties = {}
-
-            for item in class_items:
-                if isinstance(getattr(self.__class__, item), property):
-                    properties[item] = getattr(self, item)
-
-            # Remove the data that will be saved with Zarr
-            array_data = {}
-            for property_name in self.array_items:
-                array_data[property_name] = properties.pop(property_name)
-
-            # Create a DataFrame with the remaining metadata
-            metadata_df = polars.DataFrame(properties)
-
-            # Save the DataFrame in HDF5 format
-            metadata_file_name = f"meta_{self.segment_name}_{self.detector_id}_{self.reference_time_gps}.h5"
-            metadata_df.write_parquet(os.path.join(save_path, metadata_file_name))
-
-            # saving values
-            zarr.open(
-                os.path.join(
-                    save_path,
-                    f"values_{self.segment_name}_{self.detector_id}_{self.reference_time_gps}.zarr",
-                ),
-                mode="w",
-                shape=self.values.shape,
-                dtype=self.values.dtype,
-            )[:] = self.values
-
-            # saving times
-            zarr.open(
-                os.path.join(
-                    save_path,
-                    f"gps_times_{self.segment_name}_{self.detector_id}_{self.reference_time_gps}.zarr",
-                ),
-                mode="w",
-                shape=self.gps_times.shape,
-                dtype=self.gps_times.dtype,
-            )[:] = self.gps_times
-
-    @abc.abstractmethod
-    def __repr__(self) -> str:
-        """
-        Return a string representation of time serie.
+        String representation method.
 
         Returns
         -------
         str
-            String representation.
+            String representation of the Time Series.
         """
         # Initialize tables for array and attribute representations
         array_tab = [["name", "content", "shape", "size"]]
         attribute_tab = [["name", "value", "type", "size"]]
 
-        # Get all attributes of the class as a dictionary
-        class_items = dir(self.__class__)
-        property_names = [
-            item
-            for item in class_items
-            if isinstance(getattr(self.__class__, item), property)
-        ]
+        array_tab.append(
+            # adding strain to print
+            [
+                f"strain\n{type(self.strain)}<{self.strain.dtype}>",
+                self.strain.__repr__(),
+                self.strain.shape,
+                format_size(self.strain.nbytes),
+            ]
+        )
 
-        # Iterate through attributes of the object
-        for property_name in property_names:
-            value = self.__dict__[f"_{property_name}"]
-            if property_name in self.array_items:
-                if value is not None:
-                    dtype_str = f"{type(value).__name__}<{value.dtype}>"
-                    value_str = value.__repr__()
-                    start_idx = value_str.index("[")
-                    end_idx = value_str.rindex("]") + 1
-                name = f"{property_name}\n[{dtype_str if value is not None else 'not allocated yet'}]"
-                content = value_str[start_idx:end_idx] if value is not None else "-----"
-                shape = value.shape if value is not None else "-----"
-                size = (
-                    format_size(value.nbytes) if value is not None else format_size(0)
-                )
-                if property_name in ["values", "gps_times"]:
-                    array_tab.insert(1, [name, content, shape, size])
-                else:
-                    array_tab.append([name, content, shape, size])
-            else:
-                _type = (
-                    value.dtype
-                    if hasattr(value, "dtype")
-                    else str(type(value)).split("'")[1]
-                )
-                size = format_size(
-                    value.nbytes if hasattr(value, "nbytes") else sys.getsizeof(value)
-                )
-                attribute_tab.append([property_name, value, _type, size])
+        array_tab.append(
+            # adding gps time
+            [
+                (
+                    f"strain\n{type(self._gps_times)}<{self._gps_times.dtype}>"
+                    if self._gps_times is not None
+                    else "gps_time\n'not allocated yet'"
+                ),
+                self._gps_times.__repr__() if self._gps_times is not None else "-----",
+                self._gps_times.shape if self._gps_times is not None else "-----",
+                self._gps_times.nbytes if self._gps_times is not None else "-----",
+            ]
+        )
+
+        array_tab.append(
+            # adding fft values
+            [
+                (
+                    f"fft_values\n{type(self._fft_values)}<{self._fft_values.dtype}>"
+                    if self._fft_values is not None
+                    else "fft_values\n'not allocated yet'"
+                ),
+                (
+                    self._fft_values.__repr__()
+                    if self._fft_values is not None
+                    else "-----"
+                ),
+                self._fft_values.shape if self._fft_values is not None else "-----",
+                self._fft_values.nbytes if self._fft_values is not None else "-----",
+            ]
+        )
+
+        array_tab.append(
+            # adding fft freqs
+            [
+                (
+                    f"fft_freqs\n{type(self._fft_freqs)}<{self._fft_freqs.dtype}>"
+                    if self._fft_freqs is not None
+                    else "fft_freqs\n'not allocated yet'"
+                ),
+                self._fft_freqs.__repr__() if self._fft_freqs is not None else "-----",
+                self._fft_freqs.shape if self._fft_freqs is not None else "-----",
+                self._fft_freqs.nbytes if self._fft_freqs is not None else "-----",
+            ]
+        )
+
+        for key, attr in asdict(self.attrs).items():
+
+            _type = (
+                attr.dtype if hasattr(attr, "dtype") else str(type(attr)).split("'")[1]
+            )
+            size = format_size(
+                attr.nbytes if hasattr(attr, "nbytes") else sys.getsizeof(attr)
+            )
+            attribute_tab.append(
+                [key, attr if key != "detector" else attr.value, _type, size]
+            )
 
         # Format tables into strings using tabulate
         array_str = tabulate.tabulate(

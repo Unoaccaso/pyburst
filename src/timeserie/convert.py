@@ -14,13 +14,9 @@ You should have received a copy of the GNU Affero General Public License
 along with this program. If not, see <https: //www.gnu.org/licenses/>.
 """
 
-from timeserie.common._typing import (
-    type_check,
-    _ARRAY_LIKE,
-    _FLOAT_LIKE,
-    _INT_LIKE,
-    _FLOAT_EPS,
-)
+from timeserie.common import _typing
+from timeserie.common._typing import type_check, _FLOAT_EPS
+from timeserie.core import BaseSeriesAttrs, Detectors
 from timeserie.core.cpu import CPUSerie
 from timeserie import CACHE
 
@@ -32,168 +28,178 @@ import cupy
 
 @type_check(classmethod=False)
 def from_array(
-    values: _ARRAY_LIKE,
-    segment_name: str = "-",
-    detector_id: str = "-",
-    gps_times: _ARRAY_LIKE | None = None,
-    reference_time_gps: _FLOAT_LIKE = None,
-    detector_name: str = None,
-    dt: _FLOAT_LIKE = None,
-    sampling_rate: _INT_LIKE = None,
-    t0_gps: _FLOAT_LIKE = None,
-    duration: _FLOAT_LIKE = None,
+    strain: _typing.ARRAY_LIKE,
+    segment_name: str = "_",
+    detector_id: str = "_",
+    gps_times: _typing.ARRAY_LIKE = None,
+    dt: _typing.FLOAT_LIKE = None,
+    sampling_rate: _typing.INT_LIKE = None,
+    t0_gps: _typing.FLOAT_LIKE = None,
+    duration: _typing.FLOAT_LIKE = None,
     force_cache_overwrite: bool = True,
     cache_results: bool = True,
+    use_gpu: bool = False,
 ):
     """
-    Construct a TimeSeries object from an array.
+    Create TimeSeries object from an array of strain data.
+
+    This function creates a TimeSeries object from an array of strain data. It allows
+    for specifying various attributes such as segment name, detector ID, GPS times, etc.
+    It also handles caching of the created TimeSeries object for improved performance.
 
     Parameters
     ----------
-    values : numpy.ndarray[float32 | float64], dask.array.Array, cupy.ndarray[float32]
-        The values data. The returned TimeSeries object depends on the type of input values:
-        - If values is a NumPy array, a ShortSeries object is returned.
-        - If values is a Dask array or a string, a LongSeries object is returned.
-        - If values is a CuPy array, a GPUSeries object is returned.
-        The GPUSeries object utilizes GPU computing for array operations.
-        The LongSeries object supports lazy computing with Dask arrays.
-
-    gps_time : numpy.ndarray[float32 | float64], dask.array.Array, cupy.ndarray[float32], optional
-        GPS time array (if available). It must have the same dtype of `values`.
-        If not provided, it will be calculated when accessed for the first time.
-        values and GPS time can be sliced using time indices without immediate calculation of the array axes.
-
-    segment_name : str
-        Name of the segment.
-    detector_id : str
-        Identifier of the detector. Optional if `detector_name` is provided.
-    reference_time_gps : Union[float, float32, float64], optional
-        Reference GPS time.
-    detector_name : str, optional
-        Name of the detector. Required if `detector_id` is provided.
+    strain : array_like
+        Array of strain data.
+    segment_name : str, optional
+        Name of the segment. Default is "_".
+    detector_id : str, optional
+        ID of the detector. Default is "_".
+    gps_times : array_like, optional
+        Array of GPS times. Default is None. [OPTIONAL: If provided, dt, sampling_rate, t0_gps, and duration will be ignored]
     dt : Union[float, float32, float64], optional
-        Time resolution. If not provided, it will be calculated based on the sampling rate.
+        Time interval between samples. Default is None. [OPTIONAL: If sampling_rate is provided, Ignored if gps_time is provided]
     sampling_rate : Union[int, int32, int64], optional
-        Sampling rate. If not provided, it will be calculated based on the time resolution.
+        Sampling rate of the strain data. Default is None. [OPTIONAL: If dt is provided, Ignored if gps_time is provided]
     t0_gps : Union[float, float32, float64], optional
-        GPS time of the starting point. Required if `gps_time` is not provided.
+        GPS start time of the data. Default is None. [OPTIONAL: Ignored if gps_times is provided]
     duration : Union[float, float32, float64], optional
-        Duration of the time series. Required if `gps_time` is not provided.
+        Duration of the data. Default is None. [OPTIONAL: Ignored if gps_times is provided]
+    force_cache_overwrite : bool, optional
+        Whether to force overwrite cached data. Default is True.
+    cache_results : bool, optional
+        Whether to cache the created TimeSeries object. Default is True.
+    use_gpu : bool, optional
+        If True, utilize GPU for processing. Default is False.
 
     Returns
     -------
     TimeSeries
-        Time series object.
+        TimeSeries object created from the input strain data.
 
     Raises
     ------
     ValueError
-        If the input parameters are invalid.
-    NotImplementedError
-        If the values type is not supported.
+        If required parameters are not provided or if shape checks fail.
+
+    Notes
+    -----
+    - This function supports creating TimeSeries objects both on CPU.
+    - The function handles various integrity checks including:
+        - **Shape Checks**: Ensures that the shape of input data matches specified parameters.
+        - **Attribute Validations**: Validates input attributes such as GPS times, duration, etc.
+        - **Compatibility Checks**: Checks compatibility between dt and sampling rate if both are provided.
+        - **Sparse Array Check**: Checks if the input array is sparse (not supported yet).
+    - It supports caching of the created TimeSeries object for future use.
 
     Examples
     --------
-    >>> values = numpy.random.randn(1000).astype(numpy.float32)
-    >>> t_series = TimeSeries.from_array(
-    ...     values=values,
-    ...     segment_name="Test Segment",
+    Create a TimeSeries object from strain data with specified sampling rate and duration:
+
+    >>> strain_data = [0.1, 0.2, 0.3, 0.4]
+    >>> ts = from_array(
+    ...     strain=strain_data,
+    ...     segment_name="Segment1",
     ...     detector_id="H1",
-    ...     dt=0.001,
-    ...     t0_gps=1000000000.0,
-    ...     duration=1.0,
+    ...     sampling_rate=100,
+    ...     duration=2.0
     ... )
+
+    Create a TimeSeries object from strain data with specified GPS times:
+
+    >>> strain_data = [0.1, 0.2, 0.3, 0.4]
+    >>> gps_times = [1123456789.0, 1123456790.0, 1123456791.0, 1123456792.0]
+    >>> ts = from_array(
+    ...     strain=strain_data,
+    ...     segment_name="Segment1",
+    ...     detector_id="H1",
+    ...     gps_times=gps_times
+    ... )
+
     """
-
-    kwargs = {name: value for name, value in locals().items() if name != "cls"}
-
-    # * Checking time stuff
+    # Integrity checks
     if gps_times is None:
-        if t0_gps is None or duration is None or (dt is None and sampling_rate is None):
+        if dt is None and sampling_rate:
+            dt = numpy.float64(1 / sampling_rate)
+        elif sampling_rate is None and dt:
+            sampling_rate = numpy.int64(1 / dt)
+        else:
             raise ValueError(
-                f"Please provide time time data: gps_times or (t0_gps, duration, dt or sampling_rate)"
+                f"If no time array is given, you must provide either dt or sampling rate!"
             )
-        elif dt is None:
-            kwargs["sampling_rate"] = numpy.int64(sampling_rate)
-            kwargs["dt"] = numpy.float64(1 / sampling_rate)
-            warnings.warn(f'dt set to {kwargs["dt"]}')
-        elif sampling_rate is None:
-            kwargs["dt"] = numpy.float64(dt)
-            kwargs["sampling_rate"] = numpy.round(1 / dt).astype(numpy.int64)
-            warnings.warn(f'sampling_rate set to {kwargs["sampling_rate"]}')
-
-        warnings.warn(
-            f"The time array will not include the last element: [start time, end time).\nThis is to avoid superprosition of data and repetition.\nSo the actual duration is {duration - kwargs['dt']}"
-        )
-        kwargs["duration"] = numpy.float64(duration) - kwargs["dt"]
-        kwargs["t0_gps"] = numpy.float64(t0_gps)
-
-        gps_times_shape = numpy.ceil(duration * kwargs["sampling_rate"] - 1).astype(
-            numpy.int64
-        )
-        if numpy.prod(values.shape) != gps_times_shape:
+        if t0_gps is None or duration is None:
             raise ValueError(
-                f"values have shape: {len(values)}, but input time data gives a gps_times array with shape {gps_times_shape}"
+                f"If no time array is given, you must provide t0 and duration!"
+            )
+        # checking shape
+        gps_times_shape = numpy.ceil(duration * sampling_rate - 1).astype(numpy.int64)
+        if strain.shape != gps_times_shape:
+            raise ValueError(
+                f"strain have shape: {len(strain)}, but input time data gives a gps_times array with shape {gps_times_shape}"
             )
     else:
-        assert (
-            gps_times.shape == values.shape
-        ), f"Time array and value must have same shape."
-        if t0_gps is not None:
-            assert (
-                numpy.abs(t0_gps - gps_times[0]) < _FLOAT_EPS
-            ), f"t0_gps: {t0_gps} is incompatible with gps_times[0]: {gps_times[0]}"
-            kwargs["t0_gps"] = numpy.float64(t0_gps)
-        else:
-            kwargs["t0_gps"] = numpy.float64(gps_times[0])
-            warnings.warn(f't0_gps set to {kwargs["t0_gps"]}')
+        # checking shape
+        if not (gps_times.shape == strain.shape):
+            raise ValueError(f"Time array and value must have same shape.")
+        # checking if sparse
+        dts = numpy.unique(numpy.diff(gps_times))
+        if not dts.shape == (1,):
+            raise NotImplementedError(f"Sparse arrays are not supported yet")
 
-        if duration is not None:
-            assert (
-                numpy.abs(duration - (gps_times[-1] - gps_times[0])) < _FLOAT_EPS
-            ), f"duration: {duration} is incompatible with gps_times duration: {gps_times[-1] - gps_times[0]}"
-            kwargs["duration"] = numpy.float64(duration)
-        else:
-            kwargs["duration"] = numpy.float64(gps_times[-1] - gps_times[0])
-            warnings.warn(f'duration set to {kwargs["duration"]}')
+        if t0_gps:
+            warnings.warn(f"t0_gps inserted ({t0_gps}) will be ignored")
+        if dt:
+            warnings.warn(f"dt inserted ({dt}) will be ignored")
+        if sampling_rate:
+            warnings.warn(f"sampling_rate inserted ({sampling_rate}) will be ignored")
+        if duration:
+            warnings.warn(f"duration inserted ({duration}) will be ignored")
 
-        if dt is not None:
-            assert (
-                numpy.abs(dt - (gps_times[1] - gps_times[0])) < _FLOAT_EPS
-            ), f"dt: {dt} is incompatible with gps_times dt: {gps_times[1] - gps_times[0]}"
-            kwargs["dt"] = numpy.float64(dt)
-        else:
-            kwargs["dt"] = numpy.float64(gps_times[1] - gps_times[0])
-            warnings.warn(f'dt set to {kwargs["dt"]}')
+        # Extracting attrs
+        t0_gps = gps_times[0]
+        dt = dts[0]
+        sampling_rate = numpy.int64(1 / dt)
+        duration = gps_times[-1] - t0_gps + dt
 
-        if sampling_rate is not None:
-            assert (
-                numpy.abs(
-                    sampling_rate - numpy.round(1 / (gps_times[1] - gps_times[0]))
-                )
-                < _FLOAT_EPS
-            ), f"sampling_rate: {sampling_rate} is incompatible with gps_times sampling rate: {numpy.round(1 / (gps_times[1] - gps_times[0]))}"
-            kwargs["sampling_rate"] = numpy.int64(sampling_rate)
-        else:
-            kwargs["sampling_rate"] = numpy.round(
-                1 / (gps_times[1] - gps_times[0])
-            ).astype(numpy.int64)
-            warnings.warn(f'sampling_rate set to {kwargs["sampling_rate"]}')
-
-    if numpy.log2(kwargs["sampling_rate"]) % 1 != 0:
+    if not isinstance(dt, numpy.float64):
         warnings.warn(
-            f"sampling rate should be a power of 2. Other values are allowed but can result in unexpected behaviour."
+            f"Converting dt to numpy.float64\nPlease ensure that values conincide: {dt} > {numpy.float64(dt)}"
         )
-    non_series_attr = ["cache_results", "force_cache_overwrite"]
-    for attr in non_series_attr:
-        kwargs.pop(attr)
+        dt = numpy.float64(dt)
+    if not isinstance(sampling_rate, numpy.int64):
+        warnings.warn(
+            f"Converting sampling_rate to numpy.int64\nPlease ensure that values conincide: {sampling_rate} > {numpy.int64(sampling_rate)}"
+        )
+        sampling_rate = numpy.int64(sampling_rate)
+    if not isinstance(duration, numpy.float64):
+        warnings.warn(
+            f"Converting duration to numpy.float64\nPlease ensure that values conincide: {duration} > {numpy.float64(duration)}"
+        )
+        duration = numpy.float64(duration)
+    if not isinstance(t0_gps, numpy.float64):
+        warnings.warn(
+            f"Converting t0_gps to numpy.float64\nPlease ensure that values conincide: {t0_gps} > {numpy.float64(t0_gps)}"
+        )
+        t0_gps = numpy.float64(t0_gps)
 
-    if isinstance(values, numpy.ndarray):
-        out_series = CPUSerie(**kwargs)
-    elif isinstance(values, cupy.ndarray):
-        return
+    attributes = BaseSeriesAttrs(
+        segment_name,
+        Detectors[detector_id],
+        t0_gps,
+        duration,
+        dt,
+        sampling_rate,
+    )
+    if isinstance(strain, numpy.ndarray):
+        out_series = CPUSerie(strain, attributes)
+    elif isinstance(strain, cupy.ndarray) or use_gpu:
+        raise NotImplementedError(
+            f"{type(strain)} type for strain is not supported yet."
+        )
     else:
-        raise NotImplementedError(f"{type(values)} type for values is not supported.")
+        raise NotImplementedError(
+            f"{type(strain)} type for strain is not supported yet."
+        )
 
     if cache_results:
         if (
@@ -210,12 +216,12 @@ def from_gwpy(
     gwpy_timeseries: gwpy.timeseries.TimeSeries,
     segment_name: str,
     detector_id: str,
-    duration: _FLOAT_LIKE | None = None,
-    reference_time_gps: _FLOAT_LIKE | None = None,
+    duration: _typing.FLOAT_LIKE | None = None,
+    reference_time_gps: _typing.FLOAT_LIKE | None = None,
     use_gpu: bool = False,
 ):
     """
-    Create a TimeSeries object from a gwpy.timeseries.TimeSeries object.
+    Convert a gwpy.timeseries.TimeSeries object into a TimeSeries object.
 
     This method converts a `gwpy.timeseries.TimeSeries` object into a `TimeSeries` object,
     which is part of the current library. It allows for seamless integration of GWPy data
@@ -247,14 +253,21 @@ def from_gwpy(
     NotImplementedError
         If conversion is not supported for the given input type.
 
+    Notes
+    -----
+    - This function utilizes the `from_array` function internally for conversion.
+    - It automatically handles data conversion based on the specified parameters.
+    - If `use_gpu` is set to True, the function will attempt to use GPU for processing.
+
     Examples
     --------
     Convert a gwpy TimeSeries object into a TimeSeries object:
 
     >>> import gwpy.timeseries as gw
-    >>> from mylibrary import TimeSeries
+    >>> import timeserie
     >>> # Assuming 'gwpy_timeseries' is a gwpy.timeseries.TimeSeries object
     >>> # with some data loaded.
+    >>> gwpy_timeseries = gw.TimeSeries([1, 2, 3, 4], times=[0, 1, 2, 3])
     >>> ts = TimeSeries.from_gwpy(
     ...     gwpy_timeseries=gwpy_timeseries,
     ...     segment_name="GWPy Data",
@@ -263,7 +276,7 @@ def from_gwpy(
 
     Convert a gwpy TimeSeries object into a TimeSeries object with a specified duration and reference time:
 
-    >>> ts = TimeSeries.from_gwpy(
+    >>> ts = timeserie.from_gwpy(
     ...     gwpy_timeseries=gwpy_timeseries,
     ...     segment_name="GWPy Data",
     ...     detector_id="H1",
@@ -273,14 +286,14 @@ def from_gwpy(
     """
 
     if use_gpu:
-        values = cupy.array(gwpy_timeseries.value, dtype=numpy.float32)
+        strain = cupy.array(gwpy_timeseries.value, dtype=numpy.float32)
         time_axis = cupy.array(gwpy_timeseries.times.value, dtype=numpy.float64)
     else:
-        values = numpy.array(gwpy_timeseries.value, dtype=numpy.float64)
+        strain = numpy.array(gwpy_timeseries.value, dtype=numpy.float64)
         time_axis = numpy.array(gwpy_timeseries.times.value, dtype=numpy.float64)
 
     return from_array(
-        values,
+        strain,
         segment_name,
         detector_id,
         time_axis,

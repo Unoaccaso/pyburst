@@ -26,3 +26,6 @@ def from_file(path: str | list[str], engine: str = "zarr"):
         raise NotImplementedError(f"{engine} is not implemented")
 
     ENGINES[engine].open_data(path)
+
+
+def save(path: str, engine): ...

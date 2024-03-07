@@ -160,13 +160,13 @@ class LRUCache(OrderedDict):
             ]
         ]
         for key, serie in self.items():
-            dtype_str = str(type(serie.values)).split("'")[1]
+            dtype_str = str(type(serie.strain)).split("'")[1]
             rows.append(
                 [
                     key[0],
                     key[1],
-                    f"[{dtype_str}<{serie.values.dtype}>]",
-                    f"{serie.duration: .1e}",
+                    f"[{dtype_str}<{serie.strain.dtype}>]",
+                    f"{serie.attrs.duration: .1e}",
                     format_size(serie.nbytes),
                     f"{serie.nbytes / self.max_size_bytes * 100 : .2f} %",
                 ]

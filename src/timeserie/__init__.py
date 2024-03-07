@@ -15,9 +15,9 @@ along with this program. If not, see <https: //www.gnu.org/licenses/>.
 """
 
 from .caching import LRUCache
-from .core.baseserie import _TimeSeriesBase
+from .core.baseserie import _BaseTimeSerie
 
-CACHE = _TimeSeriesBase.CACHE
+CACHE = _BaseTimeSerie.CACHE
 
 
 from .convert import from_array, from_gwpy

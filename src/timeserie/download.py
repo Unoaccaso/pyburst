@@ -14,12 +14,8 @@ You should have received a copy of the GNU Affero General Public License
 along with this program. If not, see <https: //www.gnu.org/licenses/>.
 """
 
-from timeserie.common._typing import (
-    type_check,
-    _ARRAY_LIKE,
-    _FLOAT_LIKE,
-    _INT_LIKE,
-)
+from timeserie.common._typing import type_check
+from timeserie.common import _typing
 
 from timeserie.convert import from_array, from_gwpy
 from timeserie import CACHE
@@ -34,14 +30,74 @@ import warnings
 def _fetch_remote(
     event_name: str,
     detector_id: str,
-    duration: _FLOAT_LIKE,
-    sampling_rate: _INT_LIKE,
+    duration: _typing.FLOAT_LIKE,
+    sampling_rate: _typing.INT_LIKE,
     repeat_on_falure: bool,
-    max_attempts: _INT_LIKE,
-    current_attempt: _INT_LIKE,
+    max_attempts: _typing.INT_LIKE,
+    current_attempt: _typing.INT_LIKE,
     verbose: bool = False,
     use_gpu: bool = False,
 ):
+    """
+    [INTERNAL FUNCTION - NOT PART OF API]
+    Fetches remote time series data related to a specific gravitational wave event.
+
+    Parameters:
+    -----------
+    event_name : str
+        Name of the gravitational wave event.
+    detector_id : str
+        Identifier of the gravitational wave detector.
+    duration : _typing.FLOAT_LIKE
+        Duration of the data to fetch.
+    sampling_rate : _typing.INT_LIKE
+        Sampling rate of the data to fetch.
+    repeat_on_failure : bool
+        If True, retry fetching on failure.
+    max_attempts : _typing.INT_LIKE
+        Maximum number of attempts for fetching.
+    current_attempt : _typing.INT_LIKE
+        Current attempt number.
+    verbose : bool, optional
+        If True, print verbose output during fetching. Default is False.
+    use_gpu : bool, optional
+        If True, utilize GPU for processing. Default is False.
+
+    Returns:
+    --------
+    gwpy.signal.base.BaseTimeSeries
+        Time series data fetched from the remote source.
+
+    Raises:
+    -------
+    ConnectionError
+        If fetching fails after the maximum number of attempts.
+
+    Notes:
+    ------
+    - This function connects to the gwosc (Gravitational Wave Open Science Center) to fetch remote data.
+    - The fetched data is centered around the specified gravitational wave event and detector.
+    - If the duration of the fetched data differs from the specified duration, a warning is issued.
+    - Utilizes recursion to retry fetching data in case of failure.
+
+
+    Examples:
+    ---------
+    >>> data = _fetch_remote(
+    ...     event_name='GW170817',
+    ...     detector_id='H1',
+    ...     duration=4.0,
+    ...     sampling_rate=1024,
+    ...     repeat_on_failure=True,
+    ...     max_attempts=3,
+    ...     current_attempt=1,
+    ...     verbose=True,
+    ...     use_gpu=False
+    ... )
+    Connecting to gwosc for GW170817(H1)...
+    done!
+    Duration of downloaded data set to: 4.0
+    """
     try:
         if verbose:
             print(f"Connecting to gwosc for {event_name}({detector_id})...")
@@ -49,9 +105,7 @@ def _fetch_remote(
         if verbose:
             print("done!")
         start_time = reference_time_gps - duration / 2
-        end_time = (
-            reference_time_gps + duration / 2 + 1 / sampling_rate
-        )  # to inlcude last
+        end_time = reference_time_gps + duration / 2
         timeserie = gwpy.timeseries.TimeSeries.fetch_open_data(
             detector_id,
             start_time,
@@ -97,10 +151,10 @@ def _fetch_remote(
 def fetch_by_name(
     event_names: str | list[str],
     detector_ids: str | list[str],
-    duration: _FLOAT_LIKE = 100.0,
-    sampling_rate: _INT_LIKE = 4096,
+    duration: _typing.FLOAT_LIKE = 100.0,
+    sampling_rate: _typing.INT_LIKE = 4096,
     repeat_on_falure: bool = True,
-    max_attempts: _INT_LIKE = 100,
+    max_attempts: _typing.INT_LIKE = 100,
     verbose: bool = False,
     use_gpu: bool = False,
     force_cache_overwrite: bool = False,
@@ -159,6 +213,7 @@ def fetch_by_name(
     ...     sampling_rate=2048,  # Sampling rate set to 2048 Hz
     ...     verbose=True  # Verbose output enabled
     ... )
+    # Example of output: {('GWEvent1', 'H1'): TimeSeries(...)}
 
     Fetch data for multiple events and detectors:
 
@@ -169,17 +224,13 @@ def fetch_by_name(
     ...     sampling_rate=4096,  # Sampling rate set to 4096 Hz
     ...     use_gpu=True,  # Utilize GPU for processing
     ... )
+    # Example of output: {('GWEvent1', 'H1'): TimeSeries(...), ('GWEvent1', 'L1'): TimeSeries(...), ('GWEvent2', 'H1'): TimeSeries(...), ('GWEvent2', 'L1'): TimeSeries(...)}
 
     """
     if isinstance(event_names, str):
         event_names = [event_names]
     if isinstance(detector_ids, str):
         detector_ids = [detector_ids]
-    # if any(
-    #     detector_id not in _DECODE_DETECTOR.keys()
-    #     for detector_id in detector_ids
-    # ):
-    #     raise NotImplementedError(f"Unsupported detector id!")
     with concurrent.futures.ThreadPoolExecutor() as executor:
         futures = [
             executor.submit(
@@ -197,12 +248,12 @@ def fetch_by_name(
             for event_name in event_names
             for detector_id in detector_ids
             if (event_name, detector_id) not in CACHE
-            or duration != CACHE[(event_name, detector_id)].duration
+            or duration != CACHE[(event_name, detector_id)].attrs.duration
             or force_cache_overwrite
             or (
                 use_gpu
                 and not isinstance(
-                    CACHE[(event_name, detector_id)],
+                    CACHE[(event_name, detector_id)].strain,
                     cupy.ndarray,
                 )
             )
@@ -210,8 +261,8 @@ def fetch_by_name(
         out_var = {}
         for future in futures:
             timeserie = future.result()
-            event_name = timeserie.segment_name
-            detector_id = timeserie.detector_id
+            event_name = timeserie.attrs.segment_name
+            detector_id = timeserie.attrs.detector.name
             out_var[(event_name, detector_id)] = timeserie
             event_names.remove(event_name) if event_name in event_names else ...
             detector_ids.remove(detector_id) if detector_id in detector_ids else ...

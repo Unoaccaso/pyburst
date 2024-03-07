@@ -28,23 +28,32 @@ T = typing.TypeVar("T")
 
 from numpy import float32, float64, int32, int64, complex64, complex128
 
-_ARRAY_LIKE = typing.Union[
+
+ARRAY_LIKE = typing.Union[
     numpy.ndarray[float32],
     numpy.ndarray[float64],
     dask.array.Array,
     cupy.typing.NDArray[float32],
     cupy.typing.NDArray[float64],
 ]
-_FLOAT_LIKE = typing.Union[
+FLOAT_LIKE = typing.Union[
     float,
     float32,
     float64,
 ]
-_INT_LIKE = typing.Union[
+INT_LIKE = typing.Union[
     int,
     int32,
     int64,
 ]
+COMPLEX_LIKE = typing.Union[
+    complex,
+    complex64,
+    complex128,
+]
+REAL_NUM = typing.Union[INT_LIKE, FLOAT_LIKE]
+COMPLEX_NUM = typing.Union[REAL_NUM, COMPLEX_LIKE]
+
 
 _FLOAT_EPS = 1e-8
 
