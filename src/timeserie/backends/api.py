@@ -15,6 +15,12 @@ along with this program. If not, see <https: //www.gnu.org/licenses/>.
 """
 
 from .zarr import ZarrStore
+from timeserie.core.cpu import CPUSerie
+
+# from timeserie.core.gpu import GPUSerie
+# from timeserie.core.lazy import LazySerie
+# from timeserie.core.sparse import SparseSerie
+
 
 ENGINES = {
     "zarr": ZarrStore,
@@ -28,4 +34,8 @@ def from_file(path: str | list[str], engine: str = "zarr"):
     ENGINES[engine].open_data(path)
 
 
-def save(path: str, engine): ...
+def save(timeserie: CPUSerie, path: str, engine: str = "zarr"):
+    if engine not in ENGINES:
+        raise NotImplementedError(f"{engine} is not implemented")
+
+    ENGINES[engine].save_data(path)

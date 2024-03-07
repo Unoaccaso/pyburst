@@ -46,6 +46,9 @@ class ZarrStore(ReadBackend):
                 future.result()
 
     @classmethod
+    def save_data(cls, file_path: str): ...
+
+    @classmethod
     def _read_zarr_file(cls, file_path: str):
         path = pathlib.Path(file_path)
         if not path.exists():

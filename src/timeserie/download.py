@@ -105,7 +105,7 @@ def _fetch_remote(
         if verbose:
             print("done!")
         start_time = reference_time_gps - duration / 2
-        end_time = reference_time_gps + duration / 2
+        end_time = reference_time_gps + duration / 2 - 1 / sampling_rate
         timeserie = gwpy.timeseries.TimeSeries.fetch_open_data(
             detector_id,
             start_time,
