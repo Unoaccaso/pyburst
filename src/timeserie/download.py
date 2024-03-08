@@ -277,6 +277,7 @@ def fetch_by_name(
     return out_var
 
 
-# TODO
+# ! TODO
 @type_check(classmethod=True)
-def fetch_by_gps(): ...
+def fetch_by_gps():
+    raise NotImplementedError(f"This function is work in progress")
