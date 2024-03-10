@@ -21,6 +21,6 @@ CACHE = _BaseTimeSerie.CACHE
 
 from .convert import from_array, from_gwpy
 from .download import fetch_by_name, fetch_by_gps
-from .backends.api import from_file, save
+from .backends.api import from_file
 
 __all__ = ["CACHE"]

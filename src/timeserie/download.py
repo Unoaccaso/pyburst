@@ -274,7 +274,10 @@ def fetch_by_name(
     if cache_results:
         CACHE.update(out_var)
 
-    return out_var
+    if len(out_var.keys()) == 1:
+        return out_var[list(out_var.keys())[0]]
+    else:
+        return out_var
 
 
 # ! TODO

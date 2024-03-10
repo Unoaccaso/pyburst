@@ -13,7 +13,7 @@
 # along with this program. If not, see <https: //www.gnu.org/licenses/>.
 
 
-from .common import ReadBackend
+from .common import BackendBase, PathBase
 
 from timeserie.convert import from_array
 
@@ -23,62 +23,66 @@ import zarr
 
 import pathlib
 import concurrent.futures
-import os
 import warnings
+from dataclasses import dataclass
 
 
-class ZarrStore(ReadBackend):
+# file pattern: SEGMENT-NAME_DETECTOR-ID_T0_SAMPLING-RATE_DURATION
+NAME_PATTERN = "*_*_*_*_*"
 
-    @classmethod
-    def open_data(cls, file_path: str | list[str]):
-        if isinstance(file_path, str):
-            file_path = [file_path]
 
-        futures = []
-        # ! TODO: FINIRE IL CODICE PER LA LETTURA DEI FILES, IL PARALLELO DEVE ESSERE SUGLI EVENTI
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            for path in file_path:
-                future = executor.submit(cls._read_zarr_file, path)
-                futures.append(future)
+@dataclass
+class ZarrPath(PathBase):
 
-            for future in futures:
-                future.result()
+    def _check_path_firm(self, path_str: pathlib.Path):
 
-    @classmethod
-    def save_data(cls, file_path: str): ...
+        path = pathlib.Path(path_str)
 
-    @classmethod
-    def _read_zarr_file(cls, file_path: str):
-        path = pathlib.Path(file_path)
+        # check path existance
         if not path.exists():
-            warnings.warn(f"\n{path.absolute()} does not exist, skipping")
-            return None
-        value_file = list(path.glob("**/values_*.zarr"))
+            raise FileExistsError(f"{path.absolute()} does not exist")
 
-        if not value_file:
+        # check if contains zarr
+        data_files = list(path.glob(NAME_PATTERN + ".zarr"))
+        if len(data_files) == 0:
+            raise FileNotFoundError(
+                f"no zarr file found in {path}\nCheck name pattern: SEGMENT-NAME_DETECTOR-ID_T0_SAMPLING-RATE_DURATION.zarr"
+            )
+        elif len(data_files) > 1:
+            raise ValueError(f"Multiple metadata files found!")
 
-            warnings.warn(f"\nno values file found in path, skipping")
-            return None
-        elif len(value_file) > 1:
+        # check if contains meta
+        meta_files = list(path.glob("meta_" + NAME_PATTERN + "h5"))
+        if len(meta_files) == 0:
+            raise FileNotFoundError(
+                f"no metadata file found in {path}\nCheck name pattern: meta_SEGMENT-NAME_DETECTOR-ID_T0_SAMPLING-RATE_DURATION.h5"
+            )
+        elif len(meta_files) > 1:
+            raise ValueError(f"Multiple metadata files found!")
 
-            warnings.warn(f"\nmultiple values file found in path, skipping!")
-            return None
 
-        metadata_file = list(path.glob("**/meta*.h5"))
-        if not metadata_file:
-            warnings.warn(f"\nno metadata file found in path, skipping")
-            return None
-        elif len(metadata_file) > 1:
-            warnings.warn(f"\nmultiple metadata file found in path, skipping!")
-            return None
+class ZarrStore(BackendBase):
 
-        values = zarr.open(value_file[0], mode="r")[:]
-        meta = polars.read_parquet(metadata_file[0])
-        time_file = list(path.glob("**/gps_times*.zarr"))
+    @classmethod
+    def open_data(cls, file_paths: str | list):
+        if isinstance(file_paths, str):
+            file_paths = [file_paths]
 
-        if time_file and len(time_file) == 1:
-            gps_times = zarr.open(time_file[0], mode="r")[:]
-        else:
-            gps_times = None
+        zarr_paths = []
+        for file_path in file_paths:
+            zarr_paths.append(ZarrPath(file_path))
 
-        return from_array(values=values, gps_times=gps_times)
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            results = executor.map(cls._read_zarr_file, zarr_paths)
+            timeseries = list(results)
+
+        return timeseries
+
+    @classmethod
+    def _read_zarr_file(cls, file_path: ZarrPath):
+        if not isinstance(file_path, ZarrPath):
+            raise ValueError(f"Path must be a ZarrPath object")
+
+        meta_path = list(file_path.path.glob("meta_" + NAME_PATTERN + "h5"))[0]
+        metadata = polars.read_parquet(meta_path)
+        print(metadata)

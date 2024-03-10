@@ -83,5 +83,7 @@ class CPUSerie(_BaseTimeSerie):
     def get_time_fmt(self, new_fmt: str):
         raise NotImplementedError()
 
+    def save(self): ...
+
     def __repr__(self) -> str:
         return super().__repr__()

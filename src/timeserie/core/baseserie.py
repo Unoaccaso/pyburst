@@ -309,6 +309,18 @@ class _BaseTimeSerie(ABC):
         pass
 
     @abstractmethod
+    def save(self):
+        """
+        Save method
+
+        Returns
+        -------
+        None
+
+        """
+        pass
+
+    @abstractmethod
     def __repr__(self):
         """
         String representation method.
