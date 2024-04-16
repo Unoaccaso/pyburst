@@ -21,7 +21,7 @@ from timeserie import CACHE
 
 import cupy
 import concurrent
-import gwosc
+import gwosc.datasets
 import gwpy.timeseries
 import warnings
 

@@ -354,7 +354,11 @@ class _BaseTimeSerie(ABC):
                 ),
                 self._gps_times.__repr__() if self._gps_times is not None else "-----",
                 self._gps_times.shape if self._gps_times is not None else "-----",
-                self._gps_times.nbytes if self._gps_times is not None else "-----",
+                (
+                    format_size(self._gps_times.nbytes)
+                    if self._gps_times is not None
+                    else "-----"
+                ),
             ]
         )
 
@@ -372,7 +376,11 @@ class _BaseTimeSerie(ABC):
                     else "-----"
                 ),
                 self._fft_values.shape if self._fft_values is not None else "-----",
-                self._fft_values.nbytes if self._fft_values is not None else "-----",
+                (
+                    format_size(self._fft_values.nbytes)
+                    if self._fft_values is not None
+                    else "-----"
+                ),
             ]
         )
 
@@ -386,7 +394,11 @@ class _BaseTimeSerie(ABC):
                 ),
                 self._fft_freqs.__repr__() if self._fft_freqs is not None else "-----",
                 self._fft_freqs.shape if self._fft_freqs is not None else "-----",
-                self._fft_freqs.nbytes if self._fft_freqs is not None else "-----",
+                (
+                    format_size(self._fft_freqs.nbytes)
+                    if self._fft_freqs is not None
+                    else "-----"
+                ),
             ]
         )
 
